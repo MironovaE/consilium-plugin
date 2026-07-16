@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>dev.katherine.consilium</id>
+    <name>Consilium</name>
+    <vendor>Katherine Mironova</vendor>
+
+    <description><![CDATA[
+        A private local chat with Claude Code and Codex inside the IDE.
+        Both agents can discuss independently; an explicitly selected agent can also work in the repository.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                id="Consilium"
+                anchor="right"
+                secondary="true"
+                factoryClass="dev.katherine.consilium.ConsiliumToolWindowFactory"
+                icon="/icons/consilium.svg"/>
+    </extensions>
+</idea-plugin>
