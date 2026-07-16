@@ -11,6 +11,7 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -77,7 +78,18 @@ abstract class AbstractCliAgent implements CliAgent {
             Process process = processRef.get();
             if (process != null && process.isAlive()) {
                 process.destroy();
-                if (process.isAlive()) process.destroyForcibly();
+                // Прежний `if (isAlive()) destroyForcibly()` сразу после destroy()
+                // почти всегда истинен (SIGTERM асинхронен) — форс летел мгновенно,
+                // не давая CLI шанса умереть чисто. Ждём — но НЕ на вызывающем треде
+                // (cancel зовётся с EDT, waitFor заморозил бы UI).
+                AppExecutorUtil.getAppExecutorService().execute(() -> {
+                    try {
+                        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        process.destroyForcibly();
+                    }
+                });
             }
         };
     }

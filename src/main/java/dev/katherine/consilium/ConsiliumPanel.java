@@ -67,7 +67,12 @@ final class ConsiliumPanel implements Disposable {
     private final JButton stop = new JButton("Стоп");
     private final JButton clear = new JButton("Очистить");
     private final JBLabel status = new JBLabel("Готов к обсуждению или работе");
-    private final Map<Speaker, RunningRequest> running = new EnumMap<>(Speaker.class);
+    // Держим и запрос, и карточку: Стоп должен честно пометить карточку
+    // «остановлен», а не оставить её «думает…» навсегда.
+    private record ActiveRun(RunningRequest request, MessageCard card) {
+    }
+
+    private final Map<Speaker, ActiveRun> running = new EnumMap<>(Speaker.class);
     private volatile boolean disposed;
 
     ConsiliumPanel(Project project) {
@@ -199,8 +204,11 @@ final class ConsiliumPanel implements Disposable {
             @Override
             public void onTextDelta(String delta) {
                 text.append(delta);
+                // Снимок строки берём ЗДЕСЬ (фоновый тред агента): StringBuilder не
+                // потокобезопасен, toString() на EDT гонялся бы с append() здесь.
+                String rendered = text.toString();
                 onUi(() -> {
-                    response.body().setText(text.toString());
+                    response.body().setText(rendered);
                     scrollToBottom();
                 });
             }
@@ -237,7 +245,7 @@ final class ConsiliumPanel implements Disposable {
         Path rootPath = Path.of(Objects.requireNonNullElse(project.getBasePath(), System.getProperty("user.dir")));
         String resumableSession = access == AgentAccess.READ_ONLY ? session.sessionId : null;
         RunningRequest request = agent.start(rootPath, prompt, resumableSession, access, listener);
-        running.put(speaker, request);
+        running.put(speaker, new ActiveRun(request, response));
     }
 
     private MessageCard addMessageCard(Speaker speaker, String initialText, boolean pending) {
@@ -324,7 +332,12 @@ final class ConsiliumPanel implements Disposable {
     }
 
     private void cancelAll() {
-        for (RunningRequest request : new ArrayList<>(running.values())) request.cancel();
+        for (Map.Entry<Speaker, ActiveRun> entry : new ArrayList<>(running.entrySet())) {
+            entry.getValue().request().cancel();
+            // Партиал оставляем видимым, но карточка перестаёт врать «думает…»:
+            // отменённый агент listener'а уже не позовёт.
+            entry.getValue().card().name().setText(entry.getKey().label() + " · остановлен");
+        }
         running.clear();
         updateControls();
         status.setText("Остановлено");
