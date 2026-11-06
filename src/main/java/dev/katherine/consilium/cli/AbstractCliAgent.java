@@ -59,7 +59,8 @@ abstract class AbstractCliAgent implements CliAgent {
                     listener.onCompleted();
                 } else {
                     String detail = nonJsonOutput.toString().trim();
-                    listener.onError(detail.isEmpty() ? speaker().label() + " CLI завершился с кодом " + exitCode : detail);
+                    String message = detail.isEmpty() ? speaker().label() + " CLI завершился с кодом " + exitCode : detail;
+                    listener.onError(message + flagHint(detail));
                 }
             } catch (IOException exception) {
                 if (!cancelled.get()) {
@@ -97,6 +98,20 @@ abstract class AbstractCliAgent implements CliAgent {
     protected abstract List<String> command(Path projectRoot, String sessionId, AgentAccess access);
 
     protected abstract void handleEvent(JsonObject event, AgentListener listener);
+
+    // Флаги CLI — нестабильная поверхность: после апгрейда агент падает сразу
+    // на разборе аргументов. Подсказываем, где искать, вместо голого stderr.
+    static String flagHint(String cliOutput) {
+        String lower = cliOutput.toLowerCase(java.util.Locale.ROOT);
+        boolean looksLikeFlagError = lower.contains("unknown option")
+                || lower.contains("unexpected argument")
+                || lower.contains("unrecognized")
+                || (lower.contains("invalid") && lower.contains("argument"));
+        return looksLikeFlagError
+                ? "\n\nПохоже, версия CLI не принимает флаги плагина. Сверь с `--help` команду в "
+                  + "ClaudeCliAgent/CodexCliAgent.command."
+                : "";
+    }
 
     private static JsonObject parse(String line) {
         try {

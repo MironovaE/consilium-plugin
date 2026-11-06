@@ -51,7 +51,9 @@ The plugin ZIP lands in `build/distributions/`.
 
 ## Status
 
-MVP, version 0.2.0. Known limitations are tracked in [BACKLOG.md](BACKLOG.md): the transcript has no size cap yet, and the Claude CLI flags in use are tied to the CLI version they were checked against.
+MVP, version 0.2.0. Open questions are tracked in [BACKLOG.md](BACKLOG.md).
+
+The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI version they were last checked against. If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
 
 ## License
 
