@@ -1,39 +1,58 @@
-# Consilium for IntelliJ IDEA
+# Consilium
 
-Личный локальный чат Katherine + Claude Code + Codex внутри IDEA.
+An IntelliJ IDEA plugin that puts one person, Claude Code, and OpenAI Codex in the same chat.
 
-## Что входит в MVP
+Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. When it is time to change code, you hand the repository to exactly one of them.
 
-- одно окно и общий локальный транскрипт;
-- независимый fan-out в Claude и Codex на каждом ходе;
-- адресация обоих или одного агента;
-- streaming там, где его отдаёт CLI, и Stop;
-- сохранение vendor session id между ходами;
-- необязательный контекст: путь открытого файла и выделенный текст;
-- режимы `Оба обсуждают`, `Claude/Codex отвечает` и `Claude/Codex делает`;
-- в режиме `делает` выбранный агент получает рабочие инструменты и право менять репозиторий, второй на этом ходе не запускается.
+**Authorship:** direction, design decisions, and review: Katherine Mironova. Implementation used Claude Code and OpenAI Codex under her direction.
 
-Плагин вызывает уже установленные официальные `claude` и `codex` CLI. Токены не читает и не хранит. Оба агента сохраняют свои пользовательские настройки и подключённые MCP; Consilium не превращает их в «голые» модели.
+## How it works
 
-## Сборка
+Each message goes out in one of five modes:
 
-Требования: IntelliJ IDEA 2026.1 и её bundled JBR. После появления wrapper:
+| Mode | Who runs | Access |
+| --- | --- | --- |
+| Both discuss | Claude and Codex, in parallel | read-only |
+| Claude answers / Codex answers | the selected agent | read-only |
+| Claude does / Codex does | the selected agent only | can edit the repository and run checks |
+
+The one coordination rule: **only one agent may write to the repository per turn.** In a "does" turn the other agent is not started, so two agents never edit the same files at once.
+
+Other details:
+
+- Answers stream as the CLI produces them; **Stop** cancels a turn and keeps the partial answer visible.
+- Vendor session ids are kept between turns, so each agent resumes its own session rather than starting cold.
+- Optional editor context attaches the open file's path and the current selection.
+- The transcript is stored per project, locally.
+
+Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent keeps its own settings, skills, and MCP servers. The plugin never reads or stores tokens.
+
+The interface text is in Russian.
+
+## Requirements
+
+- IntelliJ IDEA 2026.1 or newer (build 261+)
+- `claude` and `codex` CLIs, installed and authenticated. The plugin looks in `~/.local/bin` first, then in `PATH`.
+
+## Install
+
+Download the ZIP from [Releases](../../releases), then in IDEA: **Settings → Plugins → ⚙ → Install Plugin from Disk…**, pick the ZIP, restart, and open the **Consilium** tool window on the right.
+
+## Build from source
+
+The build compiles against a local IDEA installation. The default path is set in `gradle.properties`; override it if yours differs:
 
 ```bash
-JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home" ./gradlew buildPlugin
+JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home" \
+  ./gradlew test buildPlugin -PideaPath="/Applications/IntelliJ IDEA.app"
 ```
 
-Готовый ZIP появится в `build/distributions/`.
+The plugin ZIP lands in `build/distributions/`.
 
-## Установка
+## Status
 
-1. IDEA → Settings → Plugins.
-2. Шестерёнка → Install Plugin from Disk…
-3. Выбрать ZIP из `build/distributions/`.
-4. Перезапустить IDEA и открыть Tool Window `Consilium` справа.
+MVP, version 0.2.0. Known limitations are tracked in [BACKLOG.md](BACKLOG.md): the transcript has no size cap yet, and the Claude CLI flags in use are tied to the CLI version they were checked against.
 
-CLI должны быть авторизованы заранее обычным способом. На этой машине плагин ищет их в `~/.local/bin`, затем в `PATH`.
+## License
 
-## Работа с репозиторием
-
-Оба агента не ограничены в своих настройках, навыках и MCP. Единственное правило координации: писать в репозиторий на одном ходе может один агент. Выбери `Claude делает` или `Codex делает`; для совместного разговора оставь `Оба обсуждают`.
+[MIT](LICENSE)
