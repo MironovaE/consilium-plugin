@@ -72,6 +72,8 @@ final class ConsiliumPanel implements Disposable {
     private record ActiveRun(RunningRequest request, MessageCard card) {
     }
 
+    static final String STOPPED_MARK = "[остановлено до конца ответа]";
+
     private final Map<Speaker, ActiveRun> running = new EnumMap<>(Speaker.class);
     private volatile boolean disposed;
 
@@ -336,7 +338,13 @@ final class ConsiliumPanel implements Disposable {
             entry.getValue().request().cancel();
             // Партиал оставляем видимым, но карточка перестаёт врать «думает…»:
             // отменённый агент listener'а уже не позовёт.
-            entry.getValue().card().name().setText(entry.getKey().label() + " · остановлен");
+            MessageCard card = entry.getValue().card();
+            card.name().setText(entry.getKey().label() + " · остановлен");
+            // И сохраняем его с пометкой, иначе после перезапуска IDEA он пропадёт.
+            String partial = card.body().getText().trim();
+            if (!partial.isEmpty()) {
+                store.add(entry.getKey(), partial + "\n\n" + STOPPED_MARK);
+            }
         }
         running.clear();
         updateControls();
