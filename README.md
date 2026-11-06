@@ -18,10 +18,15 @@ Each message goes out in one of five modes:
 
 The one coordination rule: **only one agent may write to the repository per turn.** In a "does" turn the other agent is not started, so two agents never edit the same files at once.
 
+How read-only is enforced:
+
+- **Codex** runs with the `read-only` sandbox and `approval_policy="never"`, also when resuming a session. Without the second setting, an auto-approving reviewer in the user's Codex config could approve a write after the sandbox denied it.
+- **Claude Code** gets only the `Read`, `Glob` and `Grep` built-in tools. MCP tools stay available, and in non-interactive mode a tool call goes through only if it is pre-approved in the user's Claude settings, so do not pre-approve MCP tools that write if you rely on read-only discussion turns.
+
 Other details:
 
-- Answers stream as the CLI produces them; **Stop** cancels a turn and keeps the partial answer visible.
-- Vendor session ids are kept between turns, so each agent resumes its own session rather than starting cold.
+- Answers stream as the CLI produces them. **Stop** cancels a turn; the partial answer stays in the transcript, marked as cut off.
+- In discussion modes each agent resumes its own CLI session and receives only the messages it has not seen yet. A "does" turn always starts a fresh session with the full transcript: a clean task context, with permissions set explicitly rather than inherited.
 - Optional editor context attaches the open file's path and the current selection.
 - The transcript is stored per project, locally.
 
@@ -53,7 +58,7 @@ The plugin ZIP lands in `build/distributions/`.
 
 MVP, version 0.2.0. Open questions are tracked in [BACKLOG.md](BACKLOG.md).
 
-The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI version they were last checked against. If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
+The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.319, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
 
 ## License
 

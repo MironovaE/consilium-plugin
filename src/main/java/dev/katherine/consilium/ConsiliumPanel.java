@@ -245,6 +245,9 @@ final class ConsiliumPanel implements Disposable {
         };
 
         Path rootPath = Path.of(Objects.requireNonNullElse(project.getBasePath(), System.getProperty("user.dir")));
+        // Ход «делает» всегда стартует новой сессией с полным транскриптом: чистый
+        // контекст задачи, а права задают явные флаги, а не унаследованная сессия
+        // обсуждения (у codex resume песочницу флагом не задать).
         String resumableSession = access == AgentAccess.READ_ONLY ? session.sessionId : null;
         RunningRequest request = agent.start(rootPath, prompt, resumableSession, access, listener);
         running.put(speaker, new ActiveRun(request, response));
