@@ -19,19 +19,33 @@ public final class CodexCliAgent extends AbstractCliAgent {
         command.add(ExecutableResolver.resolve("codex"));
         command.add("exec");
         if (access == AgentAccess.READ_ONLY && sessionId != null && !sessionId.isBlank()) {
+            // У `exec resume` нет флага --sandbox: без -c он берёт песочницу из
+            // конфига пользователя (часто workspace-write), и обсуждение пишет в репо.
             command.add("resume");
             command.add("--json");
+            command.add("-c");
+            command.add("sandbox_mode=\"read-only\"");
+            addNoEscalation(command);
             command.add(sessionId);
             command.add("-");
         } else {
             command.add("--json");
             command.add("--sandbox");
             command.add(access == AgentAccess.WRITE ? "workspace-write" : "read-only");
+            if (access == AgentAccess.READ_ONLY) addNoEscalation(command);
             command.add("--cd");
             command.add(projectRoot.toString());
             command.add("-");
         }
         return command;
+    }
+
+    // Без этого запрещённая запись повторяется с запросом на эскалацию, и
+    // автоодобрение из конфига пользователя её пропускает: read-only ход всё
+    // равно меняет файлы (воспроизведено на codex-cli 0.167.0).
+    private static void addNoEscalation(List<String> command) {
+        command.add("-c");
+        command.add("approval_policy=\"never\"");
     }
 
     @Override

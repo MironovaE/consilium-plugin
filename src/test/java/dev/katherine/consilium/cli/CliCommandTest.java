@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Pins the CLI flags the plugin relies on. When a CLI upgrade breaks a turn,
  * re-check these lists against `claude --help` / `codex exec --help`.
- * Last checked: Claude Code 2.1.319, 2026-11-06.
+ * Last checked: Claude Code 2.1.319 and codex-cli 0.167.0, 2026-11-06.
  */
 class CliCommandTest {
     private static final Path ROOT = Path.of("/project");
@@ -36,9 +36,23 @@ class CliCommandTest {
     }
 
     @Test
-    void codexSandboxFollowsAccess() {
-        assertTrue(new CodexCliAgent().command(ROOT, null, AgentAccess.READ_ONLY).contains("read-only"));
-        assertTrue(new CodexCliAgent().command(ROOT, null, AgentAccess.WRITE).contains("workspace-write"));
+    void codexFreshReadOnlyCannotEscalate() {
+        List<String> command = args(new CodexCliAgent().command(ROOT, null, AgentAccess.READ_ONLY));
+        assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
+                "--cd", "/project", "-"), command);
+    }
+
+    @Test
+    void codexResumeForcesReadOnlySandbox() {
+        List<String> command = args(new CodexCliAgent().command(ROOT, "s1", AgentAccess.READ_ONLY));
+        assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
+                "-c", "approval_policy=\"never\"", "s1", "-"), command);
+    }
+
+    @Test
+    void codexWriteStartsFreshInWorkspaceWrite() {
+        List<String> command = args(new CodexCliAgent().command(ROOT, "s1", AgentAccess.WRITE));
+        assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write", "--cd", "/project", "-"), command);
     }
 
     @Test
