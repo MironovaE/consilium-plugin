@@ -1,6 +1,9 @@
 package dev.katherine.consilium;
 
+import com.intellij.ide.plugins.IdeaPluginDescriptor;
+import com.intellij.ide.plugins.PluginManagerCore;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
@@ -99,7 +102,12 @@ final class ConsiliumPanel implements Disposable {
         JBLabel title = new JBLabel("Consilium");
         title.setFont(title.getFont().deriveFont(Font.BOLD, title.getFont().getSize2D() + 1));
         status.setForeground(JBColor.GRAY);
-        header.add(title, BorderLayout.WEST);
+        JBLabel version = new JBLabel(pluginVersion());
+        version.setForeground(JBColor.GRAY);
+        JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
+        titleRow.add(title);
+        titleRow.add(version);
+        header.add(titleRow, BorderLayout.WEST);
         header.add(status, BorderLayout.CENTER);
         header.add(clear, BorderLayout.EAST);
 
@@ -139,6 +147,12 @@ final class ConsiliumPanel implements Disposable {
                 send();
             }
         });
+    }
+
+    // Версию берём из установленного плагина, чтобы в окне было видно, какая сборка стоит.
+    private static String pluginVersion() {
+        IdeaPluginDescriptor plugin = PluginManagerCore.getPlugin(PluginId.getId("dev.katherine.consilium"));
+        return plugin == null ? "" : "v" + plugin.getVersion();
     }
 
     private void renderStoredMessages() {
