@@ -14,6 +14,10 @@ import java.util.UUID;
 
 final class ConsiliumStateStore {
     private static final String KEY = "dev.katherine.consilium.state.v1";
+    // Весь транскрипт сериализуется в workspace.xml проекта, который IDEA
+    // читает при каждом открытии. Режем по количеству, и только при загрузке:
+    // посреди сессии индексы seenThrough и snapshotSize в живых ходах не сдвигаются.
+    static final int MAX_STORED_MESSAGES = 300;
     private final PropertiesComponent properties;
     private final Gson gson = new Gson();
     private ConsiliumSnapshot state;
@@ -64,10 +68,19 @@ final class ConsiliumStateStore {
             if (parsed.messages == null) parsed.messages = new ArrayList<>();
             if (parsed.claude == null) parsed.claude = new AgentSession(null, 0);
             if (parsed.codex == null) parsed.codex = new AgentSession(null, 0);
-            return parsed;
+            return trimmed(parsed, MAX_STORED_MESSAGES);
         } catch (RuntimeException ignored) {
             return new ConsiliumSnapshot();
         }
+    }
+
+    static ConsiliumSnapshot trimmed(ConsiliumSnapshot snapshot, int limit) {
+        int excess = snapshot.messages.size() - limit;
+        if (excess <= 0) return snapshot;
+        snapshot.messages = new ArrayList<>(snapshot.messages.subList(excess, snapshot.messages.size()));
+        snapshot.claude.seenThrough = Math.max(0, snapshot.claude.seenThrough - excess);
+        snapshot.codex.seenThrough = Math.max(0, snapshot.codex.seenThrough - excess);
+        return snapshot;
     }
 
     private void save() {
