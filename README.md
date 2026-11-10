@@ -37,7 +37,7 @@ The coordination rule: **two agents never write to the same files at once.** In 
 
 - Each has its own git worktree and branch outside the project, starting from the last commit. Uncommitted changes aren't in the copies, and Consilium says so.
 - The agents don't commit; Consilium commits each part on its branch when the agent is done, or when you say "merge" after a part was stopped. An agent in a copy gets no write access to the repository's `.git`, and Consilium's own git commands in a copy run with hooks and fsmonitor switched off, so a hook an agent edits in its copy (a husky `.husky/` script, a pre-commit config) never runs outside its sandbox.
-- Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge".
+- Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge". A part that changes git hook settings (`.husky/`, a pre-commit or lefthook config, `package.json`) isn't merged automatically either, because merging runs those hooks in the project: Consilium asks you to look and say "merge".
 - If a part fails, is stopped, or changes nothing, nothing is merged and the work stays on its branch until you say "merge". **Clear** keeps that work too and says where it is. A new parallel task starts only after earlier parts are merged.
 - Parallel work needs a git repository with at least one commit.
 
@@ -109,7 +109,7 @@ The plugin ZIP lands in `build/distributions/`. The build compiles against the I
 
 ## Status
 
-MVP, version 0.3.2. Open questions and deliberate decisions are tracked in [BACKLOG.md](BACKLOG.md).
+MVP, version 0.4.0. Open questions and deliberate decisions are tracked in [BACKLOG.md](BACKLOG.md).
 
 The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.322, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
 
