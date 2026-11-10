@@ -69,8 +69,11 @@ class CliRunTest {
         return script;
     }
 
+    // The MCP listing gets a generous budget: under load even a shell script can take a second to
+    // start, and a timed-out listing refuses the turn, which a test expecting an answer would
+    // misread as a failure.
     private static CodexCliAgent codex(Path cli) {
-        return new CodexCliAgent(cli, Duration.ofSeconds(1));
+        return new CodexCliAgent(cli, Duration.ofSeconds(10));
     }
 
     private Path project() throws IOException {
@@ -98,6 +101,29 @@ class CliRunTest {
             Thread.sleep(50);
         }
         fail("process " + pid + " is still alive");
+    }
+
+    @Test
+    void discussionSettingsGoThroughAPrivateFileThatIsDeletedAfterTheTurn() throws Exception {
+        Path settings = dir.resolve("user-settings.json");
+        Files.writeString(settings, "{\"model\": \"haiku\", \"hooks\": {\"SessionStart\": []}}");
+        Path seen = dir.resolve("seen");
+        // The fake CLI records the path after --settings, the file's mode and its content.
+        Path cli = script("cat > /dev/null\n"
+                + "while [ $# -gt 0 ]; do if [ \"$1\" = --settings ]; then f=\"$2\"; fi; shift; done\n"
+                + "echo \"$f\" > '" + seen + ".path'\n"
+                + "stat -f %Lp \"$f\" > '" + seen + ".mode'\n"
+                + "cat \"$f\" > '" + seen + ".json'\n"
+                + "echo '" + CLAUDE_RESULT + "'");
+        Recorder listener = new Recorder();
+        RunningRequest request = new ClaudeCliAgent(cli, settings).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+
+        assertEquals("completed", listener.awaitOutcome());
+        awaitTerminated(request);
+        assertEquals("600", Files.readString(Path.of(seen + ".mode")).strip());
+        assertEquals("{\"model\":\"haiku\"}", Files.readString(Path.of(seen + ".json")).strip());
+        Path passed = Path.of(Files.readString(Path.of(seen + ".path")).strip());
+        assertFalse(Files.exists(passed), "the settings copy is deleted once the turn is over");
     }
 
     @Test
@@ -185,8 +211,10 @@ class CliRunTest {
         RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
         assertEquals("completed", listener.awaitOutcome());
-        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < CliRun.ROOT_EXIT_GRACE.toSeconds(),
-                "completion must not wait for the tree");
+        // The grandchild sleeps 300 s: completing well before that proves the end-of-turn event,
+        // not end of stream, ended the turn. The bound is loose so a busy CI runner can't flake it.
+        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 60,
+                "completion must not wait for the grandchild");
         awaitTerminated(request);
         assertGone(pid("child.pid"));
     }
@@ -323,7 +351,9 @@ class CliRunTest {
             Path ran = dir.resolve("ran");
             Path cli = script(listing, "touch '" + ran + "'\necho '" + CODEX_COMPLETED + "'");
             Recorder listener = new Recorder();
-            RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+            // A short timeout keeps the hanging case fast; every other case is refused either way.
+            RunningRequest request = new CodexCliAgent(cli, Duration.ofSeconds(1))
+                    .start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
             String outcome = listener.awaitOutcome();
             assertTrue(outcome.startsWith("error:Consilium couldn't list the Codex MCP servers"), listing + " -> " + outcome);

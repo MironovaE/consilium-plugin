@@ -4,6 +4,7 @@ import dev.katherine.consilium.cli.AgentAccess;
 import dev.katherine.consilium.cli.AgentListener;
 import dev.katherine.consilium.cli.CliAgent;
 import dev.katherine.consilium.cli.RunningRequest;
+import dev.katherine.consilium.cli.SessionIds;
 import dev.katherine.consilium.model.AgentSession;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.MessageStatus;
@@ -68,8 +69,12 @@ final class ChatSession {
         private final StringBuilder text = new StringBuilder();
         private final AtomicBoolean framePending = new AtomicBoolean();
         private volatile String sessionId;
+        // Set on the agent's thread as soon as it reports an outcome, before the UI hears of it:
+        // Stop pressed in between must not turn a finished answer into a cut-off one.
+        private volatile boolean outcomeReported;
         RunningRequest request;
         boolean settled;
+        boolean exited;
 
         Run(Speaker speaker, AgentAccess access, int snapshotSize, String sessionId, AnswerView view) {
             this.speaker = speaker;
@@ -107,11 +112,13 @@ final class ChatSession {
 
         @Override
         public void onCompleted() {
+            outcomeReported = true;
             onUi(() -> complete(this));
         }
 
         @Override
         public void onError(String message) {
+            outcomeReported = true;
             onUi(() -> fail(this, message));
         }
     }
@@ -160,19 +167,25 @@ final class ChatSession {
         AgentSession session = store.session(speaker);
         // A "does" turn always starts a fresh session with the whole transcript: a clean task
         // context, with permissions set by explicit flags rather than inherited from a discussion
-        // session (codex can't set the sandbox when resuming).
-        boolean fresh = access == AgentAccess.WRITE || session.sessionId == null || session.sessionId.isBlank();
+        // session (codex can't set the sandbox when resuming). A stored id the CLI layer wouldn't
+        // resume counts as no session here too, or the agent would get a follow-up prompt in a
+        // session that has never seen the conversation.
+        String resumable = access == AgentAccess.WRITE ? null : SessionIds.resumable(session.sessionId);
+        boolean fresh = resumable == null;
         String prompt = ConversationPromptBuilder.build(snapshot, speaker, session.seenThrough, fresh, editorContext, access);
-        Run run = new Run(speaker, access, snapshot.size(), fresh ? null : session.sessionId, view.answerStarted(speaker));
+        Run run = new Run(speaker, access, snapshot.size(), resumable, view.answerStarted(speaker));
         runs.put(speaker, run);
         try {
-            run.request = agents.apply(speaker).start(projectRoot, prompt, fresh ? null : session.sessionId, access, run);
+            run.request = agents.apply(speaker).start(projectRoot, prompt, resumable, access, run);
         } catch (RuntimeException exception) {
             runs.remove(speaker);
             fail(run, String.valueOf(exception.getMessage()));
             return;
         }
-        run.request.terminated().whenComplete((ignored, error) -> onUi(() -> exited(run)));
+        run.request.terminated().whenComplete((ignored, error) -> onUi(() -> {
+            run.exited = true;
+            release(run);
+        }));
     }
 
     private void complete(Run run) {
@@ -187,7 +200,7 @@ final class ChatSession {
             store.resetSession(run.speaker);
         }
         run.view.completed(answer);
-        view.stateChanged(state());
+        release(run);
     }
 
     private void fail(Run run, String detail) {
@@ -196,14 +209,16 @@ final class ChatSession {
         store.add(run.speaker, detail, MessageStatus.ERROR);
         if (run.access == AgentAccess.WRITE) store.resetSession(run.speaker);
         run.view.failed(detail);
-        view.stateChanged(state());
+        release(run);
     }
 
     /** Stops every agent; what they managed to write is kept, marked as cut off. */
     void stop() {
         for (Run run : new ArrayList<>(runs.values())) {
+            // cancel() returns only after any callback in flight has finished, so after it
+            // outcomeReported is final: a reported answer is left to its queued completion.
             if (run.request != null) run.request.cancel();
-            if (run.settled) continue;
+            if (run.settled || run.outcomeReported) continue;
             run.settled = true;
             keepPartial(run);
             run.view.stopped(run.text().trim());
@@ -218,8 +233,16 @@ final class ChatSession {
         if (run.access == AgentAccess.WRITE) store.resetSession(run.speaker);
     }
 
-    private void exited(Run run) {
-        if (runs.get(run.speaker) == run) runs.remove(run.speaker);
+    /**
+     * A run leaves the room only when its answer is settled AND its processes have exited, in
+     * whichever order those happen; until then the room isn't ready for the next turn.
+     */
+    private void release(Run run) {
+        if (run.settled && run.exited && runs.get(run.speaker) == run) {
+            runs.remove(run.speaker);
+            // Indices of turns in flight are no longer in use, so the transcript can be trimmed.
+            if (runs.isEmpty()) store.compact();
+        }
         view.stateChanged(state());
     }
 

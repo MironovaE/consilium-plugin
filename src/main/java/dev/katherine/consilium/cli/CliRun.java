@@ -20,7 +20,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * One CLI turn: starts the process, feeds the prompt, parses events, and guarantees that the
  * listener hears exactly one of completed/error (none after {@link #cancel()}) and that the process
- * tree is gone on every path, including exceptions.
+ * tree is gone on every path, including exceptions. {@link #terminated()} completes only after the
+ * outcome was delivered (or the turn was cancelled), so a caller that waits for it never sees a
+ * late answer after it has moved on.
  */
 final class CliRun implements RunningRequest {
     /** How long a CLI may linger after its end-of-turn event before its tree is stopped. */
@@ -117,11 +119,7 @@ final class CliRun implements RunningRequest {
         }
 
         ProcessTree processTree = new ProcessTree(process);
-        processTree.gone().whenComplete((ignored, error) -> {
-            terminated.complete(null);
-            AppExecutorUtil.getAppScheduledExecutorService().schedule(
-                    () -> settleFromExit(process), STUCK_READER_GRACE.toMillis(), TimeUnit.MILLISECONDS);
-        });
+        processTree.gone().whenComplete((ignored, error) -> awaitOutcomeThenTerminate(process, System.nanoTime()));
         tree = processTree;
         if (cancelled) {
             processTree.stop();
@@ -208,6 +206,44 @@ final class CliRun implements RunningRequest {
         String detail = reported != null ? reported : output;
         String message = detail.isEmpty() ? ConsiliumBundle.message("error.exit.code", label, exitCode) : detail;
         settle(message + AbstractCliAgent.flagHint(output));
+    }
+
+    /**
+     * Completes {@link #terminated()} once the outcome is delivered. The reader usually settles the
+     * turn within moments of the exit; if it doesn't (a process that escaped the tree still holds
+     * stdout), the exit code decides after {@link #STUCK_READER_GRACE} and the stream is closed so
+     * the reader thread isn't left blocked.
+     */
+    private void awaitOutcomeThenTerminate(Process process, long goneAt) {
+        if (isSettled()) {
+            terminated.complete(null);
+            return;
+        }
+        if (System.nanoTime() - goneAt >= STUCK_READER_GRACE.toNanos()) {
+            try {
+                settleFromExit(process);
+                closeQuietly(process);
+            } finally {
+                terminated.complete(null);
+            }
+            return;
+        }
+        AppExecutorUtil.getAppScheduledExecutorService().schedule(
+                () -> awaitOutcomeThenTerminate(process, goneAt), 50, TimeUnit.MILLISECONDS);
+    }
+
+    private boolean isSettled() {
+        synchronized (deliveryLock) {
+            return settled;
+        }
+    }
+
+    private static void closeQuietly(Process process) {
+        try {
+            process.getInputStream().close();
+        } catch (IOException exception) {
+            LOG.debug("Couldn't close the CLI's output", exception);
+        }
     }
 
     private void settle(@Nullable String error) {

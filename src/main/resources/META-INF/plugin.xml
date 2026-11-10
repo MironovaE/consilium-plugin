@@ -9,6 +9,10 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <dependencies>
+        <!-- MarkdownText sanitizes answers with the platform's bundled jsoup. -->
+        <module name="intellij.libraries.jsoup"/>
+    </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow

@@ -16,8 +16,8 @@ import java.util.UUID;
 final class ConsiliumStateStore {
     private static final String KEY = "dev.katherine.consilium.state.v1";
     // The whole transcript is serialized into the project's workspace.xml, which the IDE reads on
-    // every open. It is trimmed by count and only on load, so that the seenThrough and snapshot
-    // indices of turns in flight never shift mid-session.
+    // every open. It is trimmed by count on load and between turns (compact), never during one,
+    // so that the seenThrough and snapshot indices of turns in flight don't shift.
     static final int MAX_STORED_MESSAGES = 300;
 
     /** Where the serialized transcript lives; the project's PropertiesComponent in the IDE. */
@@ -76,6 +76,13 @@ final class ConsiliumStateStore {
         AgentSession target = sessionOf(speaker);
         target.sessionId = null;
         target.seenThrough = 0;
+        save();
+    }
+
+    /** Trims the transcript to the limit; call only when no turn is running. */
+    synchronized void compact() {
+        if (state.messages.size() <= MAX_STORED_MESSAGES) return;
+        state = trimmed(state, MAX_STORED_MESSAGES);
         save();
     }
 

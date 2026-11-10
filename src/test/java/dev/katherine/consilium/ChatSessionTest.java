@@ -12,9 +12,11 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -298,5 +300,69 @@ class ChatSessionTest {
     void editorContextReachesThePrompt() {
         session.send("look at this", TurnMode.CLAUDE, "File: /project/Main.java");
         assertTrue(claude().last().prompt.contains("<editor-context>\nFile: /project/Main.java"), claude().last().prompt);
+    }
+
+    @Test
+    void anAnswerArrivingAfterTheProcessExitedStillLandsBeforeTheNextTurn() {
+        session.send("question", TurnMode.CODEX, "");
+        FakeRun run = codex().last();
+        run.exited.complete(null);
+
+        assertEquals(ChatSession.State.WORKING, view.state, "the outcome hasn't arrived yet");
+        assertFalse(session.send("next", TurnMode.CODEX, ""));
+
+        run.listener.onError("codex CLI exited with code 1");
+        assertEquals(ChatSession.State.READY, view.state);
+        assertTrue(session.send("next", TurnMode.CODEX, ""));
+        assertEquals(List.of("question", "codex CLI exited with code 1", "next"),
+                store.messages().stream().map(ChatMessage::textValue).toList());
+    }
+
+    @Test
+    void stopDoesNotCutOffAnAnswerThatAlreadyArrived() {
+        Queue<Runnable> edt = new ArrayDeque<>();
+        ChatSession deferred = new ChatSession(store, agents::get, Path.of("/project"), edt::add, view);
+        deferred.send("question", TurnMode.CLAUDE, "");
+        FakeRun run = claude().last();
+        run.listener.onTextDelta("full answer");
+        run.listener.onCompleted();
+
+        deferred.stop();
+        while (!edt.isEmpty()) edt.poll().run();
+
+        ChatMessage answer = store.messages().get(1);
+        assertEquals(MessageStatus.ANSWER, answer.statusValue());
+        assertEquals("full answer", answer.textValue());
+        assertEquals(2, store.messages().size());
+    }
+
+    @Test
+    void anUnusableStoredSessionIdMeansAFreshPrompt() {
+        session.send("first", TurnMode.CLAUDE, "");
+        claude().last().answer("one", "claude-1");
+        store.updateSession(Speaker.CLAUDE, "--dangerously-skip-permissions", 2);
+
+        session.send("second", TurnMode.CLAUDE, "");
+
+        FakeRun run = claude().last();
+        assertNull(run.sessionId);
+        assertTrue(run.prompt.contains("discussion turn"), run.prompt);
+        assertTrue(run.prompt.contains("first"), "a fresh session gets the whole transcript");
+    }
+
+    @Test
+    void theTranscriptIsTrimmedBetweenTurns() {
+        for (int index = 0; index < ConsiliumStateStore.MAX_STORED_MESSAGES; index++) {
+            store.add(Speaker.USER, "old " + index, MessageStatus.ANSWER);
+        }
+        session.send("question", TurnMode.CLAUDE, "");
+        assertEquals(ConsiliumStateStore.MAX_STORED_MESSAGES + 1, store.messages().size(), "never during a turn");
+
+        claude().last().answer("answer", "claude-1");
+
+        assertEquals(ConsiliumStateStore.MAX_STORED_MESSAGES, store.messages().size());
+        assertEquals("answer", store.messages().get(ConsiliumStateStore.MAX_STORED_MESSAGES - 1).textValue());
+        assertEquals(ConsiliumStateStore.MAX_STORED_MESSAGES - 1, store.session(Speaker.CLAUDE).seenThrough,
+                "seenThrough shifts with the trimmed messages");
     }
 }
