@@ -144,9 +144,15 @@ final class ConsiliumPanel implements Disposable {
         stop.addActionListener(event -> cancelAll());
         clear.addActionListener(event -> clear());
 
+        // Enter sends and Shift+Enter breaks the line, as in most chat apps; Cmd+Enter keeps
+        // working for those who learned it. Pasted multi-line text is unaffected.
+        input.getEmptyText().setText(ConsiliumBundle.message("input.hint"));
         int shortcut = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
-        KeyStroke sendStroke = KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, shortcut);
-        input.getInputMap().put(sendStroke, "consilium-send");
+        InputMap keys = input.getInputMap();
+        keys.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "consilium-send");
+        keys.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, shortcut), "consilium-send");
+        keys.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.SHIFT_DOWN_MASK),
+                javax.swing.text.DefaultEditorKit.insertBreakAction);
         input.getActionMap().put("consilium-send", new AbstractAction() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent event) {
