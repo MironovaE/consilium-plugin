@@ -97,32 +97,35 @@ final class ConsiliumPanel implements Disposable {
     }
 
     private void buildUi() {
-        JPanel header = new JPanel(new BorderLayout(JBUI.scale(8), 0));
+        // Один ряд по базовой линии: заголовок, версия, статус и текст кнопки стоят на одной
+        // строке, а не центрируются каждый по своей высоте. FlowLayout тут не годится — он
+        // добавляет зазор и слева, и шапка уезжает от края карточек.
+        JPanel header = new JPanel(new GridBagLayout());
         header.setBorder(JBUI.Borders.empty(8, 10));
         JBLabel title = new JBLabel("Consilium");
         title.setFont(title.getFont().deriveFont(Font.BOLD, title.getFont().getSize2D() + 1));
         status.setForeground(JBColor.GRAY);
         JBLabel version = new JBLabel(pluginVersion());
         version.setForeground(JBColor.GRAY);
-        JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
-        titleRow.add(title);
-        titleRow.add(version);
-        header.add(titleRow, BorderLayout.WEST);
-        header.add(status, BorderLayout.CENTER);
-        header.add(clear, BorderLayout.EAST);
+        addOnBaseline(header, title, 6, false);
+        addOnBaseline(header, version, 12, false);
+        addOnBaseline(header, status, 8, true);
+        addOnBaseline(header, clear, 0, false);
 
         input.setLineWrap(true);
         input.setWrapStyleWord(true);
         input.setBorder(JBUI.Borders.empty(8));
+        input.setFont(JBUI.Fonts.label());
         JBScrollPane inputScroll = new JBScrollPane(input);
-        inputScroll.setPreferredSize(new Dimension(100, JBUI.scale(94)));
+        inputScroll.setPreferredSize(new Dimension(100, JBUI.scale(76)));
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
-        actions.add(new JBLabel("Режим:"));
-        actions.add(target);
-        actions.add(includeEditorContext);
-        actions.add(send);
-        actions.add(stop);
+        JPanel actions = new JPanel(new GridBagLayout());
+        addOnBaseline(actions, new JBLabel("Режим:"), 6, false);
+        addOnBaseline(actions, target, 10, false);
+        addOnBaseline(actions, includeEditorContext, 10, false);
+        addOnBaseline(actions, send, 6, false);
+        addOnBaseline(actions, stop, 0, false);
+        addOnBaseline(actions, Box.createHorizontalGlue(), 0, true);
         stop.setEnabled(false);
 
         JPanel composer = new JPanel(new BorderLayout(0, JBUI.scale(7)));
@@ -149,6 +152,17 @@ final class ConsiliumPanel implements Disposable {
         });
     }
 
+    private static void addOnBaseline(JPanel row, Component component, int gapAfter, boolean grow) {
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = row.getComponentCount();
+        c.gridy = 0;
+        c.anchor = GridBagConstraints.BASELINE_LEADING;
+        c.weightx = grow ? 1 : 0;
+        c.fill = grow ? GridBagConstraints.HORIZONTAL : GridBagConstraints.NONE;
+        c.insets = JBUI.insetsRight(gapAfter);
+        row.add(component, c);
+    }
+
     // Версию берём из установленного плагина, чтобы в окне было видно, какая сборка стоит.
     private static String pluginVersion() {
         IdeaPluginDescriptor plugin = PluginManagerCore.getPlugin(PluginId.getId("dev.katherine.consilium"));
@@ -166,7 +180,9 @@ final class ConsiliumPanel implements Disposable {
 
     private void addWelcome() {
         JPanel card = new JPanel(new BorderLayout());
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setBorder(JBUI.Borders.empty(18, 12));
+        card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
         JBTextArea text = messageArea("Одна комната для Katherine, Claude и Codex.\nНапиши сообщение — оба получат один независимый снимок разговора.");
         text.setForeground(JBColor.GRAY);
         card.add(text, BorderLayout.CENTER);
@@ -270,9 +286,9 @@ final class ConsiliumPanel implements Disposable {
     private MessageCard addMessageCard(Speaker speaker, String initialText, boolean pending) {
         JPanel card = new JPanel(new BorderLayout(0, JBUI.scale(5)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
         card.setBorder(cardBorder(speaker));
-        card.setOpaque(true);
-        card.setBackground(cardBackground(speaker));
+        card.setOpaque(false);
 
         JBLabel name = new JBLabel(pending ? speaker.label() + " · думает…" : speaker.label());
         name.setFont(name.getFont().deriveFont(Font.BOLD));
@@ -295,6 +311,8 @@ final class ConsiliumPanel implements Disposable {
         area.setWrapStyleWord(true);
         area.setOpaque(false);
         area.setBorder(JBUI.Borders.empty());
+        // JTextArea по умолчанию моноширинная — в карточке рядом с именем это две гарнитуры.
+        area.setFont(JBUI.Fonts.label());
         return area;
     }
 
@@ -308,19 +326,11 @@ final class ConsiliumPanel implements Disposable {
         );
     }
 
-    private static Color cardBackground(Speaker speaker) {
-        return switch (speaker) {
-            case KATHERINE -> new JBColor(new Color(255, 249, 231), new Color(67, 56, 35));
-            case CLAUDE -> new JBColor(new Color(248, 244, 238), new Color(57, 49, 44));
-            case CODEX -> new JBColor(new Color(241, 247, 252), new Color(40, 51, 63));
-        };
-    }
-
     private static Color accent(Speaker speaker) {
         return switch (speaker) {
             case KATHERINE -> new JBColor(new Color(177, 122, 16), new Color(231, 176, 70));
             case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
-            case CODEX -> new JBColor(new Color(42, 100, 145), new Color(108, 170, 220));
+            case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
         };
     }
 
