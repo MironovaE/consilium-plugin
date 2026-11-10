@@ -30,7 +30,9 @@ abstract class AbstractCliAgent implements CliAgent {
     @Override
     public final RunningRequest start(Path projectRoot, String prompt, String sessionId, AgentAccess access, AgentListener listener) {
         CliRun run = new CliRun(speaker().label(), listener, newParser());
-        AppExecutorUtil.getAppExecutorService().execute(() -> run.run(() -> launch(projectRoot, sessionId, access), prompt));
+        TurnFiles files = new TurnFiles();
+        run.terminated().whenComplete((ignored, error) -> files.deleteAll());
+        AppExecutorUtil.getAppExecutorService().execute(() -> run.run(() -> launch(projectRoot, sessionId, access, files), prompt));
         return run;
     }
 
@@ -44,7 +46,7 @@ abstract class AbstractCliAgent implements CliAgent {
      * the CLI first (Codex lists its MCP servers); throwing refuses the turn.
      */
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment) throws IOException {
+                                 Map<String, String> environment, TurnFiles files) throws IOException {
         return arguments(projectRoot, sessionId, access);
     }
 
@@ -59,12 +61,12 @@ abstract class AbstractCliAgent implements CliAgent {
      * secrets" is safe to strip, and doing so would buy nothing: the CLI is the user's own program,
      * running as the user, and can read the same secrets from disk anyway.
      */
-    private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access) throws Exception {
+    private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access, TurnFiles files) throws Exception {
         Map<String, String> environment = EnvironmentUtil.getEnvironmentMap();
         Path binary = executable != null ? executable : ExecutableResolver.resolve(executableName, projectRoot, environment);
         List<String> command = new ArrayList<>();
         command.add(binary.toString());
-        command.addAll(launchArguments(binary, projectRoot, sessionId, access, environment));
+        command.addAll(launchArguments(binary, projectRoot, sessionId, access, environment, files));
         return new GeneralCommandLine(command)
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
                 .withWorkingDirectory(projectRoot)

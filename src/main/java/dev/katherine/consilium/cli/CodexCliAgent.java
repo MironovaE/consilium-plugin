@@ -34,7 +34,7 @@ public final class CodexCliAgent extends AbstractCliAgent {
     // outside the sandbox, so a read-only turn switches each of them off; see CodexMcpServers.
     @Override
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment) throws IOException {
+                                 Map<String, String> environment, TurnFiles files) throws IOException {
         if (access != AgentAccess.READ_ONLY) return arguments(projectRoot, sessionId, access);
         List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout);
         return arguments(projectRoot, sessionId, access, servers);

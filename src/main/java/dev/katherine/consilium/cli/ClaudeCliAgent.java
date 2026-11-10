@@ -7,17 +7,27 @@ import com.google.gson.JsonObject;
 import dev.katherine.consilium.model.Speaker;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public final class ClaudeCliAgent extends AbstractCliAgent {
+    private final @Nullable Path userSettings;
+
     public ClaudeCliAgent() {
-        this(null);
+        this(null, ClaudeUserSettings.defaultFile());
     }
 
+    /** For tests: a fake CLI and no user settings. */
     ClaudeCliAgent(@Nullable Path executable) {
+        this(executable, null);
+    }
+
+    ClaudeCliAgent(@Nullable Path executable, @Nullable Path userSettings) {
         super("claude", executable);
+        this.userSettings = userSettings;
     }
 
     @Override
@@ -54,6 +64,20 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
         } else {
             command.add("--permission-mode");
             command.add("auto");
+        }
+        return command;
+    }
+
+    @Override
+    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
+                                 Map<String, String> environment, TurnFiles files) throws IOException {
+        List<String> command = arguments(projectRoot, sessionId, access);
+        if (access == AgentAccess.READ_ONLY) {
+            String kept = ClaudeUserSettings.discussionSubset(userSettings);
+            if (kept != null) {
+                command.add("--settings");
+                command.add(files.createPrivate("consilium-claude-settings-", kept).toString());
+            }
         }
         return command;
     }

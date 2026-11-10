@@ -28,18 +28,18 @@ class CliCommandTest {
     void claudeReadOnlyResumesWithReadToolsOnly() {
         List<String> expected = new ArrayList<>(CLAUDE_READ_ONLY);
         expected.addAll(List.of("--resume", "s1"));
-        assertEquals(expected, new ClaudeCliAgent().arguments(ROOT, "s1", AgentAccess.READ_ONLY));
+        assertEquals(expected, new ClaudeCliAgent(null, null).arguments(ROOT, "s1", AgentAccess.READ_ONLY));
     }
 
     @Test
     void claudeReadOnlyStartsFreshWithoutSession() {
-        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY));
+        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent(null, null).arguments(ROOT, null, AgentAccess.READ_ONLY));
     }
 
     @Test
     void claudeWriteStartsFreshInAutoMode() {
         assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--permission-mode", "auto"), new ClaudeCliAgent().arguments(ROOT, "s1", AgentAccess.WRITE));
+                "--permission-mode", "auto"), new ClaudeCliAgent(null, null).arguments(ROOT, "s1", AgentAccess.WRITE));
     }
 
     @Test
@@ -93,7 +93,7 @@ class CliCommandTest {
     @Test
     void sessionIdThatLooksLikeAFlagStartsAFreshSession() {
         String hostile = "--dangerously-bypass-approvals-and-sandbox";
-        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent().arguments(ROOT, hostile, AgentAccess.READ_ONLY));
+        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent(null, null).arguments(ROOT, hostile, AgentAccess.READ_ONLY));
         assertEquals(new CodexCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY),
                 new CodexCliAgent().arguments(ROOT, hostile, AgentAccess.READ_ONLY));
     }
