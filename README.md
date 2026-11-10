@@ -4,6 +4,10 @@ An IntelliJ IDEA plugin that puts one person, Claude Code, and OpenAI Codex in t
 
 Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. When it is time to change code, you hand the repository to exactly one of them.
 
+![Both agents answer the same question in the Consilium tool window](assets/chat.png)
+
+*Both agents answer one question independently, each with its own argument. The plugin interface is in Russian.*
+
 **Authorship:** direction, design decisions, and review: Katherine Mironova. Implementation used Claude Code and OpenAI Codex under her direction.
 
 ## How it works
