@@ -29,14 +29,14 @@ How read-only is enforced:
 
 Other details:
 
-- Answers stream as the CLI produces them. **Stop** ends the turn and everything the agent started (MCP servers, test runs, background commands); the partial answer stays in the transcript, marked as cut off. A new turn starts only after every process from the previous one has exited.
+- Answers stream as the CLI produces them. **Stop** ends the turn and every process still attached to it (MCP servers, test runs, background commands); the partial answer stays in the transcript, marked as cut off. A new turn starts only after every process from the previous one has exited.
 - In discussion modes each agent resumes its own CLI session and receives only the messages it has not seen yet. A "does" turn always starts a fresh session with the full transcript: a clean task context, with permissions set explicitly rather than inherited. After it, that agent's next discussion turn starts fresh too, so it sees its own report of what it changed.
-- Each message reaches the agents as a tagged block, and only your blocks count as instructions. An agent that read a hostile file can't make the other one take its text for yours.
+- Each message reaches the agents as a tagged block, and only your blocks count as instructions. The agents are told to treat each other's text as quoted opinion, so an agent that read a hostile file can't simply pose as you; like any prompt-level defense, this lowers the risk rather than ruling it out.
 - An agent that fails shows its error in red; errors are never passed to the other agent as something said.
 - Optional editor context attaches the open file's path and the current selection.
 - The transcript is stored per project, locally.
 
-Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent uses your account and, in "does" turns, its own settings, skills, and MCP servers. The plugin never reads or stores tokens.
+Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent uses your account and, in "does" turns, its own settings, skills, and MCP servers. The plugin keeps no credentials of its own. For Claude's discussion turns it reads the model, `env` and sign-in keys of your `~/.claude/settings.json` (see above), which may include an API key, and hands them back to the CLI through a temporary file readable only by you, deleted when the turn ends.
 
 The interface follows the IDE language: English by default, Russian when the IDE runs with a Russian locale. Agents are asked to reply in the language you write in.
 
