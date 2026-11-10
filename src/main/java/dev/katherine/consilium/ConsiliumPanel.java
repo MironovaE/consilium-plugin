@@ -35,7 +35,7 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ConsiliumPanel implements Disposable {
-    private record MessageCard(JBLabel name, JBTextArea body) {
+    private record MessageCard(JBLabel name, MessageBody body) {
     }
 
     private enum Target {
@@ -60,7 +60,7 @@ final class ConsiliumPanel implements Disposable {
     private final Project project;
     private final ConsiliumStateStore store;
     private final JPanel root = new JPanel(new BorderLayout());
-    private final JPanel transcript = new JPanel(new BorderLayout());
+    private final JPanel transcript = new WidthTrackingPanel();
     private final JPanel messageList = new JPanel();
     private final JBScrollPane transcriptScroll;
     private final JBTextArea input = new JBTextArea(4, 20);
@@ -240,7 +240,7 @@ final class ConsiliumPanel implements Disposable {
                 // потокобезопасен, toString() на EDT гонялся бы с append() здесь.
                 String rendered = text.toString();
                 onUi(() -> {
-                    response.body().setText(rendered);
+                    response.body().setMarkdown(rendered);
                     scrollToBottom();
                 });
             }
@@ -255,7 +255,7 @@ final class ConsiliumPanel implements Disposable {
                     store.updateSession(speaker, sessionId.get(), snapshotSize);
                 }
                 onUi(() -> {
-                    response.body().setText(finalAnswer);
+                    response.body().setMarkdown(finalAnswer);
                     response.name().setText(speaker.label());
                     finish(speaker);
                 });
@@ -266,8 +266,7 @@ final class ConsiliumPanel implements Disposable {
                 String error = "Не получилось ответить: " + message;
                 store.add(speaker, error);
                 onUi(() -> {
-                    response.body().setText(error);
-                    response.body().setForeground(JBColor.RED);
+                    response.body().showError(error, JBColor.RED);
                     response.name().setText(speaker.label() + " · ошибка");
                     finish(speaker);
                 });
@@ -293,7 +292,8 @@ final class ConsiliumPanel implements Disposable {
         JBLabel name = new JBLabel(pending ? speaker.label() + " · думает…" : speaker.label());
         name.setFont(name.getFont().deriveFont(Font.BOLD));
         name.setForeground(accent(speaker));
-        JBTextArea body = messageArea(initialText);
+        MessageBody body = new MessageBody();
+        body.setMarkdown(initialText);
         card.add(name, BorderLayout.NORTH);
         card.add(body, BorderLayout.CENTER);
         messageList.add(card);
@@ -302,6 +302,39 @@ final class ConsiliumPanel implements Disposable {
         messageList.repaint();
         scrollToBottom();
         return new MessageCard(name, body);
+    }
+
+    // Лента подстраивается под ширину окна, а не растягивается под самую длинную
+    // строку: иначе при сужении окна карточки уезжают под горизонтальную прокрутку.
+    private static final class WidthTrackingPanel extends JPanel implements Scrollable {
+        WidthTrackingPanel() {
+            super(new BorderLayout());
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
+            return JBUI.scale(16);
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
+            return orientation == SwingConstants.VERTICAL ? visible.height : visible.width;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
     }
 
     private static JBTextArea messageArea(String value) {
@@ -368,7 +401,7 @@ final class ConsiliumPanel implements Disposable {
             MessageCard card = entry.getValue().card();
             card.name().setText(entry.getKey().label() + " · остановлен");
             // И сохраняем его с пометкой, иначе после перезапуска IDEA он пропадёт.
-            String partial = card.body().getText().trim();
+            String partial = card.body().markdown().trim();
             if (!partial.isEmpty()) {
                 store.add(entry.getKey(), partial + "\n\n" + STOPPED_MARK);
             }
