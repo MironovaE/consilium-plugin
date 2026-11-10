@@ -5,8 +5,14 @@ import dev.katherine.consilium.model.Speaker;
 
 import java.util.List;
 
-/** Who answers a message and with what access. Only a "does" mode grants write access, and to one agent. */
+/**
+ * Who answers a message and with what access. The explicit modes are for people who prefer to pick;
+ * {@link #AUTO} reads it from the message. Only a "does" mode, or a clear request in AUTO, grants
+ * write access.
+ */
 enum TurnMode {
+    /** The person just writes; what to do is read from the message (see ChatSession). */
+    AUTO("target.auto", AgentAccess.READ_ONLY),
     BOTH("target.both", AgentAccess.READ_ONLY, Speaker.CLAUDE, Speaker.CODEX),
     CLAUDE("target.claude", AgentAccess.READ_ONLY, Speaker.CLAUDE),
     CODEX("target.codex", AgentAccess.READ_ONLY, Speaker.CODEX),

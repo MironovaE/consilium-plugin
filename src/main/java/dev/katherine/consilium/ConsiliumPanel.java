@@ -14,12 +14,15 @@ import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextArea;
 import com.intellij.util.ui.JBUI;
+import com.intellij.util.concurrency.AppExecutorUtil;
 import com.intellij.util.ui.NamedColorUtil;
 import dev.katherine.consilium.cli.ClaudeCliAgent;
 import dev.katherine.consilium.cli.CliAgent;
 import dev.katherine.consilium.cli.CodexCliAgent;
+import dev.katherine.consilium.intent.ClaudeIntentClassifier;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.Speaker;
+import dev.katherine.consilium.work.GitCliWorktrees;
 
 import javax.swing.*;
 import java.awt.*;
@@ -64,7 +67,8 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
         // Without a base path (the default project) agents would run in the IDE's own working
         // directory, which may be "/". Such a panel stays read-only and says why.
         Path rootPath = hasProjectRoot ? Path.of(basePath) : Path.of(System.getProperty("user.home"));
-        session = new ChatSession(new ConsiliumStateStore(project), ConsiliumPanel::agentFor, rootPath, this::onUi, this);
+        session = new ChatSession(new ConsiliumStateStore(project), ConsiliumPanel::agentFor, new ClaudeIntentClassifier(),
+                new ParallelWork(new GitCliWorktrees()), rootPath, this::onUi, AppExecutorUtil.getAppExecutorService(), this);
 
         messageList.setLayout(new BoxLayout(messageList, BoxLayout.Y_AXIS));
         history.setLayout(new BoxLayout(history, BoxLayout.Y_AXIS));
@@ -88,7 +92,7 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
         return switch (speaker) {
             case CLAUDE -> new ClaudeCliAgent();
             case CODEX -> new CodexCliAgent();
-            case USER -> throw new IllegalArgumentException("The user is not an agent");
+            case USER, CONSILIUM -> throw new IllegalArgumentException(speaker + " is not an agent");
         };
     }
 
@@ -174,7 +178,7 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
         if (!hasProjectRoot) return;
         TurnMode selected = (TurnMode) mode.getSelectedItem();
         String context = includeEditorContext.isSelected() ? editorContext() : "";
-        if (session.send(input.getText(), selected == null ? TurnMode.BOTH : selected, context)) {
+        if (session.send(input.getText(), selected == null ? TurnMode.AUTO : selected, context)) {
             input.setText("");
         }
     }
@@ -358,6 +362,7 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
             case USER -> new JBColor(new Color(56, 111, 216), new Color(138, 174, 255));
             case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
             case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
+            case CONSILIUM -> new JBColor(new Color(120, 124, 132), new Color(150, 154, 162));
         };
     }
 

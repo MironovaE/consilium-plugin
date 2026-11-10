@@ -7,6 +7,10 @@ import dev.katherine.consilium.cli.RunningRequest;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.MessageStatus;
 import dev.katherine.consilium.model.Speaker;
+import dev.katherine.consilium.intent.Intent;
+import dev.katherine.consilium.intent.IntentClassifier;
+import dev.katherine.consilium.work.GitWorktrees;
+import dev.katherine.consilium.work.Worktree;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +18,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -32,11 +38,13 @@ class ChatSessionTest {
         final String prompt;
         final String sessionId;
         final AgentAccess access;
+        final Path root;
         final AgentListener listener;
         final CompletableFuture<Void> exited = new CompletableFuture<>();
         boolean cancelled;
 
-        FakeRun(String prompt, String sessionId, AgentAccess access, AgentListener listener) {
+        FakeRun(Path root, String prompt, String sessionId, AgentAccess access, AgentListener listener) {
+            this.root = root;
             this.prompt = prompt;
             this.sessionId = sessionId;
             this.access = access;
@@ -76,7 +84,7 @@ class ChatSessionTest {
 
         @Override
         public RunningRequest start(Path projectRoot, String prompt, String sessionId, AgentAccess access, AgentListener listener) {
-            FakeRun run = new FakeRun(prompt, sessionId, access, listener);
+            FakeRun run = new FakeRun(projectRoot, prompt, sessionId, access, listener);
             runs.add(run);
             return run;
         }
@@ -132,6 +140,81 @@ class ChatSessionTest {
         }
     }
 
+    /** Answers with a preset intent; records what it was asked so tests can check it saw only the person's words. */
+    static final class FakeClassifier implements IntentClassifier {
+        Intent next = Intent.discussWithBoth();
+        CompletableFuture<Intent> pending;
+        final List<String> asked = new ArrayList<>();
+        boolean hold;
+        boolean cancelled;
+
+        @Override
+        public CompletionStage<Intent> classify(String userMessage, Path projectRoot) {
+            asked.add(userMessage);
+            if (hold) {
+                pending = new CompletableFuture<>();
+                return pending;
+            }
+            return CompletableFuture.completedFuture(next);
+        }
+
+        @Override
+        public void cancel() {
+            cancelled = true;
+            if (pending != null) pending.complete(Intent.discussWithBoth());
+        }
+    }
+
+    /** An in-memory git: worktrees are paths under /wt, commits are whatever the test says. */
+    static final class FakeGit implements GitWorktrees {
+        boolean repository = true;
+        boolean dirty;
+        final Map<String, List<String>> commits = new HashMap<>();
+        final List<Worktree> created = new ArrayList<>();
+        final List<Worktree> removed = new ArrayList<>();
+
+        @Override
+        public Path repositoryRoot(Path projectRoot) {
+            return repository ? Path.of("/repo") : null;
+        }
+
+        @Override
+        public boolean hasUncommittedChanges(Path repositoryRoot) {
+            return dirty;
+        }
+
+        @Override
+        public String currentBranch(Path repositoryRoot) {
+            return "main";
+        }
+
+        @Override
+        public Worktree create(Path repositoryRoot, String agentName) {
+            Worktree worktree = new Worktree(Path.of("/wt/" + agentName), "consilium/" + agentName + "-1", "base");
+            created.add(worktree);
+            commits.putIfAbsent(worktree.branch(), List.of("abc1234 " + agentName + "'s part"));
+            return worktree;
+        }
+
+        @Override
+        public List<String> commitsSinceCreated(Worktree worktree) {
+            return commits.getOrDefault(worktree.branch(), List.of());
+        }
+
+        @Override
+        public boolean hasUncommittedChanges(Worktree worktree) {
+            return false;
+        }
+
+        @Override
+        public boolean remove(Path repositoryRoot, Worktree worktree) {
+            removed.add(worktree);
+            return true;
+        }
+    }
+
+    private final FakeClassifier classifier = new FakeClassifier();
+    private final FakeGit git = new FakeGit();
     private final Map<Speaker, FakeAgent> agents = new EnumMap<>(Speaker.class);
     private final RecordingView view = new RecordingView();
     private ConsiliumStateStore store;
@@ -142,7 +225,7 @@ class ChatSessionTest {
         agents.put(Speaker.CLAUDE, new FakeAgent(Speaker.CLAUDE));
         agents.put(Speaker.CODEX, new FakeAgent(Speaker.CODEX));
         store = new ConsiliumStateStore(new ConsiliumStateStoreTest.MemoryPersistence());
-        session = new ChatSession(store, agents::get, Path.of("/project"), Runnable::run, view);
+        session = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
     }
 
     private FakeAgent claude() {
@@ -321,7 +404,7 @@ class ChatSessionTest {
     @Test
     void stopDoesNotCutOffAnAnswerThatAlreadyArrived() {
         Queue<Runnable> edt = new ArrayDeque<>();
-        ChatSession deferred = new ChatSession(store, agents::get, Path.of("/project"), edt::add, view);
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
         deferred.send("question", TurnMode.CLAUDE, "");
         FakeRun run = claude().last();
         run.listener.onTextDelta("full answer");
@@ -377,5 +460,170 @@ class ChatSessionTest {
 
         assertEquals(ChatSession.State.READY, view.state);
         assertTrue(session.send("next", TurnMode.CODEX, ""));
+    }
+
+    // Auto: the person just writes
+
+    private List<String> notices() {
+        return store.messages().stream().filter(m -> m.speakerValue() == Speaker.CONSILIUM).map(ChatMessage::textValue).toList();
+    }
+
+    @Test
+    void autoReadsOnlyThePersonsWordsAndDiscussesByDefault() {
+        session.send("what do you think about caching?", TurnMode.AUTO, "");
+
+        assertEquals(List.of("what do you think about caching?"), classifier.asked);
+        assertEquals(AgentAccess.READ_ONLY, claude().last().access);
+        assertEquals(AgentAccess.READ_ONLY, codex().last().access);
+    }
+
+    @Test
+    void autoAsksOnlyTheAgentThatWasAddressed() {
+        classifier.next = new Intent(Intent.Kind.DISCUSS, Set.of(Speaker.CODEX));
+        session.send("codex, what do you say?", TurnMode.AUTO, "");
+
+        assertEquals(1, codex().runs.size());
+        assertEquals(0, claude().runs.size());
+    }
+
+    @Test
+    void autoLetsOneNamedAgentWorkInTheProject() {
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE));
+        session.send("claude, fix the parser", TurnMode.AUTO, "");
+
+        FakeRun run = claude().last();
+        assertEquals(AgentAccess.WRITE, run.access);
+        assertEquals(Path.of("/project"), run.root);
+        assertEquals(0, codex().runs.size());
+        assertTrue(git.created.isEmpty(), "one agent works in the project itself");
+    }
+
+    @Test
+    void anUnclearMessageAsksInsteadOfStartingWork() {
+        classifier.next = new Intent(Intent.Kind.UNCLEAR, Set.of());
+        session.send("ok", TurnMode.AUTO, "");
+
+        assertEquals(0, claude().runs.size() + codex().runs.size());
+        assertEquals(List.of(ConsiliumBundle.message("notice.unclear")), notices());
+        assertEquals(ChatSession.State.READY, view.state);
+    }
+
+    @Test
+    void goAheadSendsBothToTheirOwnCopiesThenClaudeMergesAndTheCopiesGo() {
+        session.send("let's split it: claude takes the cards, codex the layout", TurnMode.AUTO, "");
+        claude().last().answer("I take the cards.", "c1");
+        codex().last().answer("I take the layout.", "x1");
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+
+        session.send("go ahead", TurnMode.AUTO, "");
+
+        FakeRun claudePart = claude().last();
+        FakeRun codexPart = codex().last();
+        assertEquals(Path.of("/wt/claude"), claudePart.root);
+        assertEquals(Path.of("/wt/codex"), codexPart.root);
+        assertEquals(AgentAccess.WRITE, claudePart.access);
+        assertTrue(claudePart.prompt.contains("consilium/claude-1"), claudePart.prompt);
+        assertTrue(claudePart.prompt.contains("I take the layout."), "each part sees the agreement");
+        assertEquals(2, store.pendingWork().size());
+        assertTrue(notices().getFirst().contains("consilium/codex-1"), notices().toString());
+
+        claudePart.answer("cards done", "c2");
+        assertEquals(2, claude().runs.size(), "the discussion and the part: no merge before both parts are done");
+        codexPart.answer("layout done", "x2");
+
+        FakeRun merge = claude().last();
+        assertEquals(Path.of("/project"), merge.root);
+        assertEquals(AgentAccess.WRITE, merge.access);
+        assertTrue(merge.prompt.contains("Claude: consilium/claude-1; Codex: consilium/codex-1"), merge.prompt);
+
+        merge.answer("merged both, tests pass", "c3");
+
+        assertEquals(2, git.removed.size());
+        assertTrue(store.pendingWork().isEmpty());
+        assertEquals(ConsiliumBundle.message("notice.merge.cleaned"), notices().getLast());
+        assertEquals(ChatSession.State.READY, view.state);
+    }
+
+    @Test
+    void withoutGitParallelWorkIsRefusedInWords() {
+        git.repository = false;
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+
+        session.send("go ahead", TurnMode.AUTO, "");
+
+        assertEquals(0, claude().runs.size() + codex().runs.size());
+        assertEquals(List.of(ConsiliumBundle.message("notice.parallel.no.git")), notices());
+        assertEquals(ChatSession.State.READY, view.state);
+    }
+
+    @Test
+    void aFailedPartIsNotMergedAndWaitsForWords() {
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().answer("cards done", "c1");
+        FakeRun codexPart = codex().last();
+        codexPart.listener.onError("codex CLI exited with code 1");
+        codexPart.exited.complete(null);
+
+        assertEquals(1, claude().runs.size(), "no merge after a failed part");
+        assertEquals(2, store.pendingWork().size(), "the work stays on its branches");
+
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CODEX));
+        session.send("codex, merge what's there", TurnMode.AUTO, "");
+
+        FakeRun merge = codex().last();
+        assertEquals(Path.of("/project"), merge.root);
+        assertTrue(merge.prompt.contains("consilium/claude-1"), merge.prompt);
+    }
+
+    @Test
+    void aPartWithoutCommitsIsNotMerged() {
+        git.commits.put("consilium/codex-1", List.of());
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().answer("cards done", "c1");
+        codex().last().answer("there was no split, so I changed nothing", "x1");
+
+        assertEquals(1, claude().runs.size(), "nothing merged");
+        assertTrue(notices().getLast().startsWith("Codex"), notices().toString());
+    }
+
+    @Test
+    void stopWhileReadingTheMessageStartsNothing() {
+        classifier.hold = true;
+        session.send("go ahead", TurnMode.AUTO, "");
+        assertEquals(ChatSession.State.WORKING, view.state);
+
+        session.stop();
+
+        assertTrue(classifier.cancelled);
+        assertEquals(ChatSession.State.READY, view.state);
+        assertEquals(0, claude().runs.size() + codex().runs.size());
+    }
+
+    @Test
+    void clearRemovesTheAgentsCopies() {
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().listener.onError("boom");
+        claude().last().exited.complete(null);
+        codex().last().listener.onError("boom");
+        codex().last().exited.complete(null);
+
+        assertTrue(session.clear());
+
+        assertEquals(2, git.removed.size());
+        assertTrue(store.pendingWork().isEmpty());
+    }
+
+    @Test
+    void noticesNeverReachTheAgents() {
+        classifier.next = new Intent(Intent.Kind.UNCLEAR, Set.of());
+        session.send("ok", TurnMode.AUTO, "");
+        classifier.next = Intent.discussWithBoth();
+
+        session.send("what now?", TurnMode.AUTO, "");
+
+        assertFalse(claude().last().prompt.contains(ConsiliumBundle.message("notice.unclear")), claude().last().prompt);
     }
 }

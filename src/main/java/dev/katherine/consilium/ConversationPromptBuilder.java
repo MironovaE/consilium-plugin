@@ -24,10 +24,16 @@ final class ConversationPromptBuilder {
     }
 
     static String build(List<ChatMessage> snapshot, Speaker agent, int seenThrough, boolean freshSession, String editorContext, AgentAccess access) {
+        return build(snapshot, agent, seenThrough, freshSession, editorContext, access, null);
+    }
+
+    /** @param writeHeader replaces the default task framing of a write turn (parallel part, merge) */
+    static String build(List<ChatMessage> snapshot, Speaker agent, int seenThrough, boolean freshSession, String editorContext,
+                        AgentAccess access, String writeHeader) {
         boolean resumes = !freshSession && access == AgentAccess.READ_ONLY;
         StringBuilder result = new StringBuilder();
         if (access == AgentAccess.WRITE) {
-            result.append(ConsiliumBundle.message("prompt.write"));
+            result.append(writeHeader != null ? writeHeader : ConsiliumBundle.message("prompt.write"));
         } else if (freshSession) {
             result.append(ConsiliumBundle.message("prompt.discuss"));
         } else {
@@ -40,8 +46,9 @@ final class ConversationPromptBuilder {
         for (int index = start; index < snapshot.size(); index++) {
             ChatMessage message = snapshot.get(index);
             MessageStatus status = message.statusValue();
-            // An error is the plugin's report about an agent, not something the agent said.
-            if (status == MessageStatus.ERROR) continue;
+            // An error is the plugin's report about an agent, not something the agent said, and a
+            // notice is the plugin talking to the person.
+            if (status == MessageStatus.ERROR || message.speakerValue() == Speaker.CONSILIUM) continue;
             // A resumed session already holds this agent's own answers.
             if (resumes && message.speakerValue() == agent) continue;
             result.append("<message from=\"").append(message.speakerValue().name().toLowerCase(Locale.ROOT)).append('"');

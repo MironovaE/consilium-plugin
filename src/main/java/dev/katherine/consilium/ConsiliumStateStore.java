@@ -7,6 +7,7 @@ import dev.katherine.consilium.model.AgentSession;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.ConsiliumSnapshot;
 import dev.katherine.consilium.model.MessageStatus;
+import dev.katherine.consilium.model.PendingWork;
 import dev.katherine.consilium.model.Speaker;
 
 import java.util.ArrayList;
@@ -79,6 +80,15 @@ final class ConsiliumStateStore {
         save();
     }
 
+    synchronized List<PendingWork> pendingWork() {
+        return new ArrayList<>(state.pendingWork);
+    }
+
+    synchronized void setPendingWork(List<PendingWork> work) {
+        state.pendingWork = new ArrayList<>(work);
+        save();
+    }
+
     /** Trims the transcript to the limit; call only when no turn is running. */
     synchronized void compact() {
         if (state.messages.size() <= MAX_STORED_MESSAGES) return;
@@ -95,7 +105,7 @@ final class ConsiliumStateStore {
         return switch (speaker) {
             case CLAUDE -> state.claude;
             case CODEX -> state.codex;
-            case USER -> throw new IllegalArgumentException("The user has no agent session");
+            case USER, CONSILIUM -> throw new IllegalArgumentException(speaker + " has no agent session");
         };
     }
 
@@ -112,6 +122,8 @@ final class ConsiliumStateStore {
             parsed.messages.forEach(ChatMessage::upgradeLegacyStatus);
             if (parsed.claude == null) parsed.claude = new AgentSession(null, 0);
             if (parsed.codex == null) parsed.codex = new AgentSession(null, 0);
+            if (parsed.pendingWork == null) parsed.pendingWork = new ArrayList<>();
+            parsed.pendingWork.removeIf(work -> work == null || work.path == null || work.branch == null);
             return trimmed(parsed, MAX_STORED_MESSAGES);
         } catch (RuntimeException ignored) {
             // A corrupt entry must not lock the tool window; the user loses the transcript, not the IDE.
