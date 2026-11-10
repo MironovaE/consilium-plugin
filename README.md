@@ -2,7 +2,7 @@
 
 An IntelliJ IDEA plugin that puts one person, Claude Code, and OpenAI Codex in the same chat.
 
-Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. When it is time to change code, one agent at a time gets write access, and a bigger task can be split between them.
+Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. You just write: ask a question and both discuss; name one of them and that one does the work; let them agree on a split, say "go ahead", and each does its part in parallel in its own copy of the repository, after which Claude merges both.
 
 ![Both agents answer the same question in the Consilium tool window](assets/chat.png)
 
@@ -12,7 +12,20 @@ Working with two coding agents usually means two terminals and copying answers b
 
 ## How it works
 
-Each message goes out in one of five modes:
+By default (**Auto**) you don't pick anything: Consilium reads what your message asks for.
+
+| You write | What happens |
+| --- | --- |
+| a question, an opinion, a plan: *"what do you think about caching?"* | both agents answer, read-only |
+| to one agent: *"Codex, what do you say?"* | only that agent answers, read-only |
+| a task for one agent: *"Claude, fix the parser"* | that agent does it in the project |
+| a go-ahead to both after they agreed on a split: *"go ahead"*, *"делайте"* | each does its part in parallel in its own git worktree and branch; when both are done, Claude merges the branches into the project and the copies are removed |
+| *"merge"*, *"Codex, merge what's there"* | merges the parts left on their branches |
+| something that could go either way: *"ok"* | Consilium asks whether to start, and nothing runs |
+
+Only your own message decides whether code may change. Consilium reads it with a separate Claude call that has no tools and sees nothing but your message, so an agent's answer, or a file an agent read, can't start work on its own. That call takes about two seconds before the agents start. If it fails, the message is treated as a question: both agents answer read-only. A task with no name on it (*"fix the parser"*) goes to Claude alone; both agents work only when the message is plainly for both.
+
+If you prefer to choose yourself, **Mode** still has the explicit modes:
 
 | Mode | Who runs | Access |
 | --- | --- | --- |
@@ -20,9 +33,7 @@ Each message goes out in one of five modes:
 | Claude answers / Codex answers | the selected agent | read-only |
 | Claude does / Codex does | the selected agent only | can edit the repository and run checks |
 
-The one coordination rule: **only one agent may write to the repository per turn.** In a "does" turn the other agent is not started, so two agents never edit the same files at once.
-
-To split a bigger task, let both agents agree in a discussion turn on who owns which files, then give each its part in its own "does" turn. If they should work at the same time, run them side by side in separate git worktrees, each on its own branch, and merge the branches yourself.
+The coordination rule: **two agents never write to the same files at once.** In a "does" turn the other agent is not started. When both work in parallel, each has its own git worktree and branch outside the project, starting from the last commit (uncommitted changes aren't in the copies, and Consilium says so); each commits its part on its branch, and only the merging agent touches the project. If a part fails or an agent commits nothing, nothing is merged and the work stays on its branch until you say "merge". Parallel work needs a git repository.
 
 How read-only is enforced:
 
@@ -55,10 +66,9 @@ Download the ZIP from [Releases](../../releases), then in IDEA: **Settings → P
 ## Usage
 
 1. Open the **Consilium** tool window on the right side of the IDE.
-2. Pick a mode in **Mode** at the bottom (see [How it works](#how-it-works)). Start with **Both discuss**: both agents read the repository but can't change it.
-3. Type a message and press **Enter**. **Shift+Enter** starts a new line; **⌘Enter** (Ctrl+Enter) also sends.
-4. Each agent's answer streams into its own card. On the next turn, each agent also gets what the other one said, so you can ask them to respond to each other: *"Each of you, reply to the other's argument in two lines."*
-5. When the plan is settled, switch to **Claude does** or **Codex does** and give the task. Only that agent runs, with write access to the project.
+2. Type a message and press **Enter**. **Shift+Enter** starts a new line; **⌘Enter** (Ctrl+Enter) also sends.
+3. Each agent's answer streams into its own card. On the next turn, each agent also gets what the other one said, so you can ask them to respond to each other: *"Each of you, reply to the other's argument in two lines."*
+4. When it's time to change code, say so in words: *"Claude, do it"* for one agent, or, once they've agreed who does what, *"go ahead"* for both. Consilium's own short notes in the transcript say what it started and where the work is.
 
 Controls:
 
@@ -72,12 +82,13 @@ The agents work in the project's root folder, so ask about the repository direct
 
 - **"Couldn't start … CLI".** The executable wasn't found in `~/.local/bin` or in your login shell's `PATH`. Check that `which claude` / `which codex` prints a path in a new terminal window, or link the CLI into `~/.local/bin` (for example `ln -s "$(which codex)" ~/.local/bin/codex`), then send the message again.
 - **"… CLI exited with code …" or "… ended the turn with an error".** The message shows what the CLI reported. Most often it isn't signed in (run `claude` and then `/login`, or `codex login`) or a CLI update changed its flags; in that case the error points to the code that builds the command.
-- **An agent didn't change anything.** Check the mode: in **Both discuss** and **… answers** the agents are read-only by design. Only **… does** can edit the project.
+- **An agent didn't change anything.** In **Auto**, a question or an unclear message is read as discussion, which is read-only by design: say plainly who should do it (*"Claude, do it"*, or *"go ahead"* for both). In the explicit modes only **… does** can edit the project.
+- **"Working in parallel needs a git repository".** Each agent works on its own branch, so the project has to be a git repository with at least one commit. Without git, ask one agent to do the whole task.
 - **"Open a project folder to use Consilium".** The tool window was opened without a project folder; agents always work inside one.
 
 ## Security and privacy
 
-- Messages, the transcript the agents need, and the editor context (file path and selection) go to Anthropic and OpenAI through their CLIs, exactly as if you typed them there. Uncheck **editor context** to send the message alone.
+- Messages, the transcript the agents need, and the editor context (file path and selection) go to Anthropic and OpenAI through their CLIs, exactly as if you typed them there. In **Auto**, each message also goes once more to Claude, alone, to read what it asks for. Uncheck **editor context** to send the message alone.
 - The transcript is stored in plain text in the project's `.idea/workspace.xml`, which IDEA's default `.idea/.gitignore` keeps out of git. **Clear** removes it there; the CLIs keep their own session logs in `~/.claude` and `~/.codex`.
 - Answers are shown with raw HTML removed: nothing in an answer can load an image or any other URL, and only `http`, `https` and `mailto` links open, on click.
 - A **does** turn runs the agent in its own auto-approval mode inside the project: it can edit files and run commands. Use it in repositories you trust.
