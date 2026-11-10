@@ -19,11 +19,11 @@ By default (**Auto**) you don't pick anything: Consilium reads what your message
 | a question, an opinion, a plan: *"what do you think about caching?"* | both agents answer, read-only |
 | to one agent: *"Codex, what do you say?"* | only that agent answers, read-only |
 | a task for one agent: *"Claude, fix the parser"* | that agent does it in the project |
-| a go-ahead to both after they agreed on a split: *"go ahead"*, *"делайте"* | each does its part in parallel in its own git worktree and branch; when both are done, Claude merges the branches into the project and the copies are removed |
+| a go-ahead to both after they agreed on a split: *"go ahead"*, *"делайте"* | each does its part in parallel in its own git worktree and branch; Consilium commits each part, Claude merges both branches into the project with proper commit messages, and the copies are removed |
 | *"merge"*, *"Codex, merge what's there"* | merges the parts left on their branches |
 | something that could go either way: *"ok"* | Consilium asks whether to start, and nothing runs |
 
-Only your own message decides whether code may change. Consilium reads it with a separate Claude call that has no tools and sees nothing but your message, so an agent's answer, or a file an agent read, can't start work on its own. That call takes about two seconds before the agents start. If it fails, the message is treated as a question: both agents answer read-only. A task with no name on it (*"fix the parser"*) goes to Claude alone; both agents work only when the message is plainly for both.
+Only your own message decides whether code may change. Consilium reads it with a separate Claude call that has no tools and sees nothing but your message, so an agent's answer, or a file an agent read, can't start work on its own. That call takes about two seconds before the agents start. If it fails, the message is treated as a question: both agents answer read-only. Text you paste is part of your message, so a pasted request ("please fix X") can read as a task. A task with no name on it (*"fix the parser"*) goes to Claude alone; both agents work only when the message is plainly for both.
 
 If you prefer to choose yourself, **Mode** still has the explicit modes:
 
@@ -33,7 +33,13 @@ If you prefer to choose yourself, **Mode** still has the explicit modes:
 | Claude answers / Codex answers | the selected agent | read-only |
 | Claude does / Codex does | the selected agent only | can edit the repository and run checks |
 
-The coordination rule: **two agents never write to the same files at once.** In a "does" turn the other agent is not started. When both work in parallel, each has its own git worktree and branch outside the project, starting from the last commit (uncommitted changes aren't in the copies, and Consilium says so); each commits its part on its branch, and only the merging agent touches the project. If a part fails or an agent commits nothing, nothing is merged and the work stays on its branch until you say "merge". Parallel work needs a git repository.
+The coordination rule: **two agents never write to the same files at once.** In a "does" turn the other agent is not started. When both work in parallel:
+
+- Each has its own git worktree and branch outside the project, starting from the last commit. Uncommitted changes aren't in the copies, and Consilium says so.
+- The agents don't commit; Consilium commits each part on its branch when the agent is done. An agent in a copy gets no write access to the repository's `.git`, so a sandboxed Codex can't plant a git hook or config that would run outside its sandbox.
+- Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge".
+- If a part fails, is stopped, or changes nothing, nothing is merged and the work stays on its branch until you say "merge". **Clear** keeps that work too and says where it is. A new parallel task starts only after earlier parts are merged.
+- Parallel work needs a git repository with at least one commit.
 
 How read-only is enforced:
 
@@ -74,7 +80,7 @@ Controls:
 
 - **editor context** — when checked, the message carries the path of the file open in the editor and the selected text, if any. Uncheck it to send the message alone.
 - **Stop** — cancels the current turn. What the agent managed to write stays in the transcript, marked as cut off.
-- **Clear** — empties the transcript and forgets both agents' CLI sessions, so the next message starts from scratch. It can't be undone.
+- **Clear** — empties the transcript and forgets both agents' CLI sessions, so the next message starts from scratch. It can't be undone. Unmerged parallel work isn't touched: the new transcript says which branches still hold it.
 
 The agents work in the project's root folder, so ask about the repository directly: *"Look at the scanner and tell me how it skips video files."*
 
