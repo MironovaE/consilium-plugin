@@ -3,56 +3,81 @@ package dev.katherine.consilium.cli;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pins the CLI flags the plugin relies on. When a CLI upgrade breaks a turn,
- * re-check these lists against `claude --help` / `codex exec --help`.
- * Last checked: Claude Code 2.1.319 and codex-cli 0.167.0, 2026-11-06.
+ * re-check these lists against `claude --help`, `codex exec --help` and `codex exec resume --help`.
+ * Last checked: Claude Code 2.1.322 and codex-cli 0.167.0, 2026-11-10 (the read-only Claude flags
+ * and both Codex forms with `--` were also run with a trivial prompt in an empty directory).
  */
 class CliCommandTest {
     private static final Path ROOT = Path.of("/project");
+    private static final List<String> CLAUDE_READ_ONLY = List.of("-p", "--output-format", "stream-json", "--verbose",
+            "--include-partial-messages", "--tools", "Read,Glob,Grep", "--restricted", "--strict-mcp-config",
+            "--permission-prompts", "none");
 
-    private static List<String> args(List<String> command) {
-        return command.subList(1, command.size());
+    @Test
+    void claudeReadOnlyResumesWithReadToolsOnly() {
+        List<String> expected = new ArrayList<>(CLAUDE_READ_ONLY);
+        expected.addAll(List.of("--resume", "s1"));
+        assertEquals(expected, new ClaudeCliAgent().arguments(ROOT, "s1", AgentAccess.READ_ONLY));
     }
 
     @Test
-    void claudeReadOnlyResumesWithReadTools() {
-        List<String> command = args(new ClaudeCliAgent().command(ROOT, "s1", AgentAccess.READ_ONLY));
-        assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--tools", "Read,Glob,Grep", "--resume", "s1"), command);
+    void claudeReadOnlyStartsFreshWithoutSession() {
+        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY));
     }
 
     @Test
     void claudeWriteStartsFreshInAutoMode() {
-        List<String> command = args(new ClaudeCliAgent().command(ROOT, "s1", AgentAccess.WRITE));
         assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--permission-mode", "auto"), command);
+                "--permission-mode", "auto"), new ClaudeCliAgent().arguments(ROOT, "s1", AgentAccess.WRITE));
     }
 
     @Test
     void codexFreshReadOnlyCannotEscalate() {
-        List<String> command = args(new CodexCliAgent().command(ROOT, null, AgentAccess.READ_ONLY));
         assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
-                "--cd", "/project", "-"), command);
+                "--cd", "/project", "--", "-"), new CodexCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY));
     }
 
     @Test
     void codexResumeForcesReadOnlySandbox() {
-        List<String> command = args(new CodexCliAgent().command(ROOT, "s1", AgentAccess.READ_ONLY));
         assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
-                "-c", "approval_policy=\"never\"", "s1", "-"), command);
+                "-c", "approval_policy=\"never\"", "--", "s1", "-"),
+                new CodexCliAgent().arguments(ROOT, "s1", AgentAccess.READ_ONLY));
     }
 
     @Test
     void codexWriteStartsFreshInWorkspaceWrite() {
-        List<String> command = args(new CodexCliAgent().command(ROOT, "s1", AgentAccess.WRITE));
-        assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write", "--cd", "/project", "-"), command);
+        assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write", "--cd", "/project", "--", "-"),
+                new CodexCliAgent().arguments(ROOT, "s1", AgentAccess.WRITE));
+    }
+
+    @Test
+    void sessionIdThatLooksLikeAFlagStartsAFreshSession() {
+        String hostile = "--dangerously-bypass-approvals-and-sandbox";
+        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent().arguments(ROOT, hostile, AgentAccess.READ_ONLY));
+        assertEquals(new CodexCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY),
+                new CodexCliAgent().arguments(ROOT, hostile, AgentAccess.READ_ONLY));
+    }
+
+    @Test
+    void sessionIdValidation() {
+        assertEquals("550a32fe-6fae-434a-985d-97723b4f735d", SessionIds.resumable("550a32fe-6fae-434a-985d-97723b4f735d"));
+        assertEquals("thread_1", SessionIds.resumable("thread_1"));
+        assertNull(SessionIds.resumable(null));
+        assertNull(SessionIds.resumable(" "));
+        assertNull(SessionIds.resumable("-x"));
+        assertNull(SessionIds.resumable("a b"));
+        assertNull(SessionIds.resumable("a;rm -rf"));
+        assertNull(SessionIds.resumable("a".repeat(129)));
     }
 
     @Test

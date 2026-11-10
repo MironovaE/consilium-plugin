@@ -2,109 +2,73 @@ package dev.katherine.consilium.cli;
 
 import dev.katherine.consilium.ConsiliumBundle;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.intellij.execution.configurations.GeneralCommandLine;
+import com.intellij.util.EnvironmentUtil;
 import com.intellij.util.concurrency.AppExecutorUtil;
+import org.jetbrains.annotations.Nullable;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Locale;
+import java.util.Map;
 
 abstract class AbstractCliAgent implements CliAgent {
-    @Override
-    public RunningRequest start(Path projectRoot, String prompt, String sessionId, AgentAccess access, AgentListener listener) {
-        AtomicReference<Process> processRef = new AtomicReference<>();
-        AtomicBoolean cancelled = new AtomicBoolean(false);
+    private final String executableName;
+    private final @Nullable Path executable;
 
-        AppExecutorUtil.getAppExecutorService().execute(() -> {
-            StringBuilder nonJsonOutput = new StringBuilder();
-            try {
-                List<String> command = command(projectRoot, sessionId, access);
-                Process process = new ProcessBuilder(command)
-                        .directory(projectRoot.toFile())
-                        .redirectErrorStream(true)
-                        .start();
-                processRef.set(process);
-                if (cancelled.get()) {
-                    process.destroyForcibly();
-                    return;
-                }
-
-                try (OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
-                    writer.write(prompt);
-                    writer.flush();
-                }
-
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        if (cancelled.get()) return;
-                        JsonObject event = parse(line);
-                        if (event == null) {
-                            if (!line.isBlank()) nonJsonOutput.append(line).append('\n');
-                            continue;
-                        }
-                        handleEvent(event, listener);
-                    }
-                }
-
-                int exitCode = process.waitFor();
-                if (cancelled.get()) return;
-                if (exitCode == 0) {
-                    listener.onCompleted();
-                } else {
-                    String detail = nonJsonOutput.toString().trim();
-                    String message = detail.isEmpty() ? ConsiliumBundle.message("error.exit.code", speaker().label(), exitCode) : detail;
-                    listener.onError(message + flagHint(detail));
-                }
-            } catch (IOException exception) {
-                if (!cancelled.get()) {
-                    listener.onError(ConsiliumBundle.message("error.launch", speaker().label(), exception.getMessage()));
-                }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                if (!cancelled.get()) listener.onError(ConsiliumBundle.message("error.interrupted", speaker().label()));
-            } catch (RuntimeException exception) {
-                if (!cancelled.get()) listener.onError(speaker().label() + ": " + exception.getMessage());
-            }
-        });
-
-        return () -> {
-            cancelled.set(true);
-            Process process = processRef.get();
-            if (process != null && process.isAlive()) {
-                process.destroy();
-                // Прежний `if (isAlive()) destroyForcibly()` сразу после destroy()
-                // почти всегда истинен (SIGTERM асинхронен) — форс летел мгновенно,
-                // не давая CLI шанса умереть чисто. Ждём — но НЕ на вызывающем треде
-                // (cancel зовётся с EDT, waitFor заморозил бы UI).
-                AppExecutorUtil.getAppExecutorService().execute(() -> {
-                    try {
-                        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
-                    } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                        process.destroyForcibly();
-                    }
-                });
-            }
-        };
+    /**
+     * @param executable a fixed executable instead of a PATH lookup; tests point it at a fake CLI
+     */
+    AbstractCliAgent(String executableName, @Nullable Path executable) {
+        this.executableName = executableName;
+        this.executable = executable;
     }
 
-    protected abstract List<String> command(Path projectRoot, String sessionId, AgentAccess access);
+    @Override
+    public final RunningRequest start(Path projectRoot, String prompt, String sessionId, AgentAccess access, AgentListener listener) {
+        CliRun run = new CliRun(speaker().label(), listener, newParser());
+        AppExecutorUtil.getAppExecutorService().execute(() -> run.run(() -> launch(projectRoot, sessionId, access), prompt));
+        return run;
+    }
 
-    protected abstract void handleEvent(JsonObject event, AgentListener listener);
+    /** The CLI arguments after the executable. An unusable {@code sessionId} means a fresh session. */
+    abstract List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access);
 
-    // Флаги CLI — нестабильная поверхность: после апгрейда агент падает сразу
-    // на разборе аргументов. Подсказываем, где искать, вместо голого stderr.
+    abstract CliEventParser newParser();
+
+    /**
+     * Starts the CLI through {@link GeneralCommandLine} with the {@code CONSOLE} parent environment,
+     * which is the login-shell environment the IDE loads at startup rather than the bare one an IDE
+     * launched from the Dock inherits; the executable is looked up in that same PATH.
+     *
+     * <p>The child keeps the whole environment on purpose. The CLIs need far more than their API
+     * keys: OAuth and keychain lookups via HOME, proxies and custom CA bundles, Bedrock/Vertex
+     * credentials, and the user's toolchain for the commands they run. No list of "unrelated
+     * secrets" is safe to strip, and doing so would buy nothing: the CLI is the user's own program,
+     * running as the user, and can read the same secrets from disk anyway.
+     */
+    private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access) throws Exception {
+        Map<String, String> environment = EnvironmentUtil.getEnvironmentMap();
+        Path binary = executable != null ? executable : ExecutableResolver.resolve(executableName, projectRoot, environment);
+        List<String> command = new ArrayList<>();
+        command.add(binary.toString());
+        command.addAll(arguments(projectRoot, sessionId, access));
+        return new GeneralCommandLine(command)
+                .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+                .withWorkingDirectory(projectRoot)
+                .withRedirectErrorStream(true)
+                .withCharset(StandardCharsets.UTF_8)
+                .createProcess();
+    }
+
+    /**
+     * CLI flags are an unstable surface: after an upgrade the agent fails right away while parsing
+     * arguments. Point at where to look instead of showing bare stderr.
+     */
     static String flagHint(String cliOutput) {
-        String lower = cliOutput.toLowerCase(java.util.Locale.ROOT);
+        String lower = cliOutput.toLowerCase(Locale.ROOT);
         boolean looksLikeFlagError = lower.contains("unknown option")
                 || lower.contains("unexpected argument")
                 || lower.contains("unrecognized option")
@@ -112,13 +76,5 @@ abstract class AbstractCliAgent implements CliAgent {
         return looksLikeFlagError
                 ? ConsiliumBundle.message("error.flag.hint")
                 : "";
-    }
-
-    private static JsonObject parse(String line) {
-        try {
-            return JsonParser.parseString(line).getAsJsonObject();
-        } catch (RuntimeException ignored) {
-            return null;
-        }
     }
 }
