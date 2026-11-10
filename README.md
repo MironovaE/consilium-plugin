@@ -36,7 +36,7 @@ If you prefer to choose yourself, **Mode** still has the explicit modes:
 The coordination rule: **two agents never write to the same files at once.** In a "does" turn the other agent is not started. When both work in parallel:
 
 - Each has its own git worktree and branch outside the project, starting from the last commit. Uncommitted changes aren't in the copies, and Consilium says so.
-- The agents don't commit; Consilium commits each part on its branch when the agent is done. An agent in a copy gets no write access to the repository's `.git`, so a sandboxed Codex can't plant a git hook or config that would run outside its sandbox.
+- The agents don't commit; Consilium commits each part on its branch when the agent is done, or when you say "merge" after a part was stopped. An agent in a copy gets no write access to the repository's `.git`, and Consilium's own git commands in a copy run with hooks and fsmonitor switched off, so a hook an agent edits in its copy (a husky `.husky/` script, a pre-commit config) never runs outside its sandbox.
 - Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge".
 - If a part fails, is stopped, or changes nothing, nothing is merged and the work stays on its branch until you say "merge". **Clear** keeps that work too and says where it is. A new parallel task starts only after earlier parts are merged.
 - Parallel work needs a git repository with at least one commit.
