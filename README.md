@@ -6,7 +6,7 @@ Working with two coding agents usually means two terminals and copying answers b
 
 ![Both agents answer the same question in the Consilium tool window](assets/chat.png)
 
-*Both agents answer one question independently, each with its own argument. The plugin interface is in Russian.*
+*Both agents answer one question independently, each with its own argument. Screenshot from the Russian interface.*
 
 **Authorship:** direction, design decisions, and review: Katherine Mironova. Implementation used Claude Code and OpenAI Codex under her direction.
 
@@ -60,7 +60,7 @@ The plugin ZIP lands in `build/distributions/`.
 
 ## Status
 
-MVP, version 0.2.1. Open questions are tracked in [BACKLOG.md](BACKLOG.md).
+MVP, version 0.3.0. Open questions are tracked in [BACKLOG.md](BACKLOG.md).
 
 The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.319, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
 
