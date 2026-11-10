@@ -105,8 +105,8 @@ abstract class AbstractCliAgent implements CliAgent {
         String lower = cliOutput.toLowerCase(java.util.Locale.ROOT);
         boolean looksLikeFlagError = lower.contains("unknown option")
                 || lower.contains("unexpected argument")
-                || lower.contains("unrecognized")
-                || (lower.contains("invalid") && lower.contains("argument"));
+                || lower.contains("unrecognized option")
+                || lower.contains("unrecognized argument");
         return looksLikeFlagError
                 ? "\n\nПохоже, версия CLI не принимает флаги плагина. Сверь с `--help` команду в "
                   + "ClaudeCliAgent/CodexCliAgent.command."

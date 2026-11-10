@@ -60,6 +60,8 @@ class CliCommandTest {
         assertFalse(AbstractCliAgent.flagHint("error: unknown option '--tools'").isEmpty());
         assertFalse(AbstractCliAgent.flagHint("error: unexpected argument '--sandbox' found").isEmpty());
         assertTrue(AbstractCliAgent.flagHint("Not logged in").isEmpty());
+        assertTrue(AbstractCliAgent.flagHint("Invalid argument: API key missing").isEmpty());
+        assertTrue(AbstractCliAgent.flagHint("unrecognized model name").isEmpty());
         assertTrue(AbstractCliAgent.flagHint("").isEmpty());
     }
 }

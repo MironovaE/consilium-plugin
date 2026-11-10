@@ -32,6 +32,7 @@ import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ConsiliumPanel implements Disposable {
@@ -72,7 +73,9 @@ final class ConsiliumPanel implements Disposable {
     private final JBLabel status = new JBLabel("Готов к обсуждению или работе");
     // Держим и запрос, и карточку: Стоп должен честно пометить карточку
     // «остановлен», а не оставить её «думает…» навсегда.
-    private record ActiveRun(RunningRequest request, MessageCard card) {
+    // settled — кто первым закрыл ход: ответ дошёл до конца или нажали «Стоп». Ответ, пришедший
+    // в момент нажатия, иначе сохранился бы дважды — целиком и обрезком с пометкой.
+    private record ActiveRun(RunningRequest request, MessageCard card, AtomicBoolean settled) {
     }
 
     static final String STOPPED_MARK = "[остановлено до конца ответа]";
@@ -226,6 +229,10 @@ final class ConsiliumPanel implements Disposable {
         MessageCard response = addMessageCard(speaker, "", true);
         StringBuilder text = new StringBuilder();
         AtomicReference<String> sessionId = new AtomicReference<>(session.sessionId);
+        AtomicBoolean settled = new AtomicBoolean();
+        // Дельты приходят каждые несколько токенов, а разбор Markdown и пересборка HTML — дорогие.
+        // На EDT уходит одна перерисовка за раз с самым свежим текстом, а не очередь из сотен.
+        AtomicReference<String> latest = new AtomicReference<>();
 
         AgentListener listener = new AgentListener() {
             @Override
@@ -238,8 +245,10 @@ final class ConsiliumPanel implements Disposable {
                 text.append(delta);
                 // Снимок строки берём ЗДЕСЬ (фоновый тред агента): StringBuilder не
                 // потокобезопасен, toString() на EDT гонялся бы с append() здесь.
-                String rendered = text.toString();
+                if (latest.getAndSet(text.toString()) != null) return;
                 onUi(() -> {
+                    String rendered = latest.getAndSet(null);
+                    if (rendered == null || settled.get()) return;
                     response.body().setMarkdown(rendered);
                     scrollToBottom();
                 });
@@ -247,6 +256,7 @@ final class ConsiliumPanel implements Disposable {
 
             @Override
             public void onCompleted() {
+                if (!settled.compareAndSet(false, true)) return;
                 String answer = text.toString().trim();
                 if (answer.isEmpty()) answer = "(пустой ответ)";
                 String finalAnswer = answer;
@@ -263,6 +273,7 @@ final class ConsiliumPanel implements Disposable {
 
             @Override
             public void onError(String message) {
+                if (!settled.compareAndSet(false, true)) return;
                 String error = "Не получилось ответить: " + message;
                 store.add(speaker, error);
                 onUi(() -> {
@@ -279,7 +290,7 @@ final class ConsiliumPanel implements Disposable {
         // обсуждения (у codex resume песочницу флагом не задать).
         String resumableSession = access == AgentAccess.READ_ONLY ? session.sessionId : null;
         RunningRequest request = agent.start(rootPath, prompt, resumableSession, access, listener);
-        running.put(speaker, new ActiveRun(request, response));
+        running.put(speaker, new ActiveRun(request, response, settled));
     }
 
     private MessageCard addMessageCard(Speaker speaker, String initialText, boolean pending) {
@@ -396,6 +407,7 @@ final class ConsiliumPanel implements Disposable {
     private void cancelAll() {
         for (Map.Entry<Speaker, ActiveRun> entry : new ArrayList<>(running.entrySet())) {
             entry.getValue().request().cancel();
+            if (!entry.getValue().settled().compareAndSet(false, true)) continue;
             // Партиал оставляем видимым, но карточка перестаёт врать «думает…»:
             // отменённый агент listener'а уже не позовёт.
             MessageCard card = entry.getValue().card();
