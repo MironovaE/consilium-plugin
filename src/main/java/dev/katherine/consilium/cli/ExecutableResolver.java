@@ -20,7 +20,7 @@ import java.util.Map;
  * ({@link com.intellij.util.EnvironmentUtil#getEnvironmentMap()}): an IDE started from the Dock
  * gets launchd's minimal PATH, which lacks /opt/homebrew/bin and the npm global bin.
  */
-final class ExecutableResolver {
+public final class ExecutableResolver {
     private static final Logger LOG = Logger.getInstance(ExecutableResolver.class);
 
     private ExecutableResolver() {
@@ -36,17 +36,7 @@ final class ExecutableResolver {
         Path project = realOrAbsolute(projectRoot);
         List<Path> directories = new ArrayList<>();
         directories.add(Path.of(System.getProperty("user.home"), ".local", "bin"));
-        String pathValue = environment.get("PATH");
-        if (pathValue != null) {
-            for (String entry : PathEnvironmentVariableUtil.getPathDirs(pathValue)) {
-                Path directory = toPath(entry);
-                if (directory == null || !directory.isAbsolute()) {
-                    LOG.info("Skipping relative PATH entry '" + entry + "' while looking for " + name);
-                    continue;
-                }
-                directories.add(directory);
-            }
-        }
+        directories.addAll(absolutePathDirectories(name, environment));
 
         Path refused = null;
         for (Path directory : directories) {
@@ -64,6 +54,37 @@ final class ExecutableResolver {
         throw new IOException(refused != null
                 ? ConsiliumBundle.message("error.executable.in.project", name, refused)
                 : ConsiliumBundle.message("error.executable.missing", name));
+    }
+
+    /**
+     * Finds a system tool such as git in the absolute PATH directories only. Unlike {@link #resolve}
+     * there is no project to check against: a repository is an argument of each git call, not where
+     * the binary is looked up, and relative PATH entries are still skipped so the working directory
+     * never decides which binary runs.
+     */
+    public static Path resolveOnPath(String name, Map<String, String> environment) throws IOException {
+        for (Path directory : absolutePathDirectories(name, environment)) {
+            for (String fileName : fileNames(name)) {
+                Path candidate = directory.resolve(fileName).normalize();
+                if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) return candidate;
+            }
+        }
+        throw new IOException(ConsiliumBundle.message("error.executable.missing.path", name));
+    }
+
+    private static List<Path> absolutePathDirectories(String name, Map<String, String> environment) {
+        List<Path> directories = new ArrayList<>();
+        String pathValue = environment.get("PATH");
+        if (pathValue == null) return directories;
+        for (String entry : PathEnvironmentVariableUtil.getPathDirs(pathValue)) {
+            Path directory = toPath(entry);
+            if (directory == null || !directory.isAbsolute()) {
+                LOG.info("Skipping relative PATH entry '" + entry + "' while looking for " + name);
+                continue;
+            }
+            directories.add(directory);
+        }
+        return directories;
     }
 
     private static List<String> fileNames(String name) {

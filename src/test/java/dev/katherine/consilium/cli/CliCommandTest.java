@@ -61,12 +61,12 @@ class CliCommandTest {
         assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
                 "-c", "mcp_servers.idea.enabled=false", "-c", "mcp_servers.mui-mcp.enabled=false",
                 "--cd", "/project", "--", "-"),
-                agent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")));
+                agent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of("idea", "mui-mcp"), List.of()));
         assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
                 "-c", "approval_policy=\"never\"", "-c", "mcp_servers.idea.enabled=false", "--", "s1", "-"),
-                agent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of("idea")));
+                agent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of("idea"), List.of()));
         assertEquals(agent.arguments(ROOT, null, AgentAccess.WRITE),
-                agent.arguments(ROOT, null, AgentAccess.WRITE, List.of("idea")));
+                agent.arguments(ROOT, null, AgentAccess.WRITE, List.of("idea"), List.of()));
     }
 
     @Test

@@ -319,7 +319,7 @@ class CliRunTest {
 
         assertEquals("completed", listener.awaitOutcome());
         awaitTerminated(request);
-        assertEquals(new CodexCliAgent().arguments(project(), "s1", AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")),
+        assertEquals(new CodexCliAgent().arguments(project(), "s1", AgentAccess.READ_ONLY, List.of("idea", "mui-mcp"), List.of()),
                 Files.readAllLines(args));
         // Project config can add servers, so the listing must run where the turn runs.
         assertEquals(project().toRealPath().toString(), Files.readString(dir.resolve("mcp.cwd")).strip());
