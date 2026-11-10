@@ -47,6 +47,14 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
 
         if ("stream_event".equals(type) && event.has("event") && event.get("event").isJsonObject()) {
             JsonObject streamEvent = event.getAsJsonObject("event");
+            // Текст до вызова инструмента и после — разные блоки; без разделителя
+            // они слипаются в одну строку, как у Codex.
+            if ("content_block_start".equals(string(streamEvent, "type")) && emittedStreamingText
+                    && streamEvent.has("content_block") && streamEvent.get("content_block").isJsonObject()
+                    && "text".equals(string(streamEvent.getAsJsonObject("content_block"), "type"))) {
+                listener.onTextDelta("\n\n");
+                return;
+            }
             if ("content_block_delta".equals(string(streamEvent, "type"))
                     && streamEvent.has("delta") && streamEvent.get("delta").isJsonObject()) {
                 String text = string(streamEvent.getAsJsonObject("delta"), "text");

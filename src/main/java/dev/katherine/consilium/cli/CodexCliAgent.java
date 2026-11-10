@@ -8,6 +8,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class CodexCliAgent extends AbstractCliAgent {
+    // Codex за ход шлёт несколько agent_message: заметку «посмотрю…» и сам ответ.
+    // Без разделителя они слипаются в одну строку: «…для выпуска.Я бы оставил».
+    private boolean emittedMessage;
+
     @Override
     public Speaker speaker() {
         return Speaker.CODEX;
@@ -15,6 +19,7 @@ public final class CodexCliAgent extends AbstractCliAgent {
 
     @Override
     protected List<String> command(Path projectRoot, String sessionId, AgentAccess access) {
+        emittedMessage = false;
         List<String> command = new ArrayList<>();
         command.add(ExecutableResolver.resolve("codex"));
         command.add("exec");
@@ -61,7 +66,9 @@ public final class CodexCliAgent extends AbstractCliAgent {
         JsonObject item = event.getAsJsonObject("item");
         if ("agent_message".equals(string(item, "type"))) {
             String text = string(item, "text");
-            if (text != null && !text.isBlank()) listener.onTextDelta(text);
+            if (text == null || text.isBlank()) return;
+            listener.onTextDelta(emittedMessage ? "\n\n" + text : text);
+            emittedMessage = true;
         }
     }
 
