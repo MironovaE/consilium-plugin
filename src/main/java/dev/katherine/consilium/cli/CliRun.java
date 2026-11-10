@@ -94,6 +94,10 @@ final class CliRun implements RunningRequest {
         // Otherwise run() hasn't published the tree yet and will see the flag right after it does.
     }
 
+    boolean isCancelled() {
+        return cancelled;
+    }
+
     @Override
     public CompletionStage<Void> terminated() {
         return terminated;
@@ -195,7 +199,12 @@ final class CliRun implements RunningRequest {
     }
 
     private void settleFromExit(Process process) {
-        if (process.isAlive()) return;
+        if (process.isAlive()) {
+            // Only reachable when the tree gave up on a process that survived SIGKILL: the turn
+            // must still end, or its card would say "thinking…" for good.
+            settle(ConsiliumBundle.message("error.not.exited", label));
+            return;
+        }
         int exitCode = process.exitValue();
         if (exitCode == 0) {
             settle(null);

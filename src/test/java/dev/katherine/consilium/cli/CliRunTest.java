@@ -337,6 +337,24 @@ class CliRunTest {
     }
 
     @Test
+    void stopWhileCodexListsMcpServersEndsTheTurnPromptly() throws Exception {
+        Path ran = dir.resolve("ran");
+        Path cli = script("exec sleep 30", "touch '" + ran + "'\necho '" + CODEX_COMPLETED + "'");
+        Recorder listener = new Recorder();
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+        Thread.sleep(300);
+        long stopped = System.nanoTime();
+
+        request.cancel();
+        awaitTerminated(request);
+
+        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - stopped) < 5,
+                "Stop must not wait for the 10 s listing timeout");
+        assertFalse(Files.exists(ran), "the turn must not start after Stop");
+        assertEquals(List.of(), listener.events());
+    }
+
+    @Test
     void codexReadOnlyTurnIsRefusedWhenMcpServersCannotBeListed() throws Exception {
         String[] listings = {
                 "echo 'Error: failed to load configuration' >&2\nexit 1",

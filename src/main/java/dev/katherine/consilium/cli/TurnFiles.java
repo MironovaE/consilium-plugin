@@ -4,6 +4,7 @@ import com.intellij.openapi.diagnostic.Logger;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -20,8 +21,11 @@ final class TurnFiles {
 
     /** A new file readable only by the current user. */
     Path createPrivate(String prefix, String content) throws IOException {
-        Path file = Files.createTempFile(prefix, ".json",
-                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        // On a non-POSIX file system (Windows) the temp folder is already inside the user's profile.
+        Path file = FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
+                ? Files.createTempFile(prefix, ".json",
+                        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+                : Files.createTempFile(prefix, ".json");
         files.add(file);
         Files.writeString(file, content, StandardCharsets.UTF_8);
         return file;

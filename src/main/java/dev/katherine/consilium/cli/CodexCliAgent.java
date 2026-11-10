@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 public final class CodexCliAgent extends AbstractCliAgent {
     private final Duration mcpListTimeout;
@@ -34,9 +35,9 @@ public final class CodexCliAgent extends AbstractCliAgent {
     // outside the sandbox, so a read-only turn switches each of them off; see CodexMcpServers.
     @Override
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment, TurnFiles files) throws IOException {
+                                 Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
         if (access != AgentAccess.READ_ONLY) return arguments(projectRoot, sessionId, access);
-        List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout);
+        List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout, cancelled);
         return arguments(projectRoot, sessionId, access, servers);
     }
 

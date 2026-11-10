@@ -365,4 +365,17 @@ class ChatSessionTest {
         assertEquals(ConsiliumStateStore.MAX_STORED_MESSAGES - 1, store.session(Speaker.CLAUDE).seenThrough,
                 "seenThrough shifts with the trimmed messages");
     }
+
+    @Test
+    void stopAfterTheProcessesAlreadyExitedFreesTheRoom() {
+        session.send("question", TurnMode.CODEX, "");
+        FakeRun run = codex().last();
+        run.listener.onTextDelta("partial");
+        run.exited.complete(null);
+
+        session.stop();
+
+        assertEquals(ChatSession.State.READY, view.state);
+        assertTrue(session.send("next", TurnMode.CODEX, ""));
+    }
 }

@@ -222,6 +222,8 @@ final class ChatSession {
             run.settled = true;
             keepPartial(run);
             run.view.stopped(run.text().trim());
+            // Its processes may already be gone; then nothing else would release the run.
+            release(run);
         }
         view.stateChanged(state());
     }

@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -58,9 +59,9 @@ final class CodexMcpServers {
     }
 
     /** Names of the servers that would start for a turn in {@code projectRoot}. */
-    static List<String> enabled(Path binary, Path projectRoot, Map<String, String> environment, Duration timeout)
-            throws TurnRefusedException {
-        return parse(list(binary, projectRoot, environment, timeout));
+    static List<String> enabled(Path binary, Path projectRoot, Map<String, String> environment, Duration timeout,
+                                BooleanSupplier cancelled) throws TurnRefusedException {
+        return parse(list(binary, projectRoot, environment, timeout, cancelled));
     }
 
     static List<String> parse(String listing) throws TurnRefusedException {
@@ -88,8 +89,8 @@ final class CodexMcpServers {
         return enabled;
     }
 
-    private static String list(Path binary, Path projectRoot, Map<String, String> environment, Duration timeout)
-            throws TurnRefusedException {
+    private static String list(Path binary, Path projectRoot, Map<String, String> environment, Duration timeout,
+                               BooleanSupplier cancelled) throws TurnRefusedException {
         Process process;
         try {
             process = new GeneralCommandLine(binary.toString(), "mcp", "list", "--json")
@@ -105,8 +106,13 @@ final class CodexMcpServers {
             // Both streams are read concurrently so neither pipe can fill up and stall the CLI.
             CompletableFuture<byte[]> stdout = readAsync(process.getInputStream(), MAX_LISTING_BYTES);
             CompletableFuture<byte[]> stderr = readAsync(process.getErrorStream(), MAX_STDERR_BYTES);
-            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                throw refused("`codex mcp list --json` did not finish in " + timeout.toSeconds() + " s");
+            // Polled rather than one long wait, so Stop doesn't keep the room busy until the timeout.
+            long deadline = System.nanoTime() + timeout.toNanos();
+            while (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
+                if (cancelled.getAsBoolean()) throw refused("stopped");
+                if (System.nanoTime() > deadline) {
+                    throw refused("`codex mcp list --json` did not finish in " + timeout.toSeconds() + " s");
+                }
             }
             String output = new String(stdout.get(timeout.toMillis(), TimeUnit.MILLISECONDS), StandardCharsets.UTF_8);
             if (process.exitValue() != 0) {

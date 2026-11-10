@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 abstract class AbstractCliAgent implements CliAgent {
     private final String executableName;
@@ -32,7 +33,7 @@ abstract class AbstractCliAgent implements CliAgent {
         CliRun run = new CliRun(speaker().label(), listener, newParser());
         TurnFiles files = new TurnFiles();
         run.terminated().whenComplete((ignored, error) -> files.deleteAll());
-        AppExecutorUtil.getAppExecutorService().execute(() -> run.run(() -> launch(projectRoot, sessionId, access, files), prompt));
+        AppExecutorUtil.getAppExecutorService().execute(() -> run.run(() -> launch(projectRoot, sessionId, access, files, run::isCancelled), prompt));
         return run;
     }
 
@@ -46,7 +47,7 @@ abstract class AbstractCliAgent implements CliAgent {
      * the CLI first (Codex lists its MCP servers); throwing refuses the turn.
      */
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment, TurnFiles files) throws IOException {
+                                 Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
         return arguments(projectRoot, sessionId, access);
     }
 
@@ -61,12 +62,13 @@ abstract class AbstractCliAgent implements CliAgent {
      * secrets" is safe to strip, and doing so would buy nothing: the CLI is the user's own program,
      * running as the user, and can read the same secrets from disk anyway.
      */
-    private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access, TurnFiles files) throws Exception {
+    private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access, TurnFiles files,
+                           BooleanSupplier cancelled) throws Exception {
         Map<String, String> environment = EnvironmentUtil.getEnvironmentMap();
         Path binary = executable != null ? executable : ExecutableResolver.resolve(executableName, projectRoot, environment);
         List<String> command = new ArrayList<>();
         command.add(binary.toString());
-        command.addAll(launchArguments(binary, projectRoot, sessionId, access, environment, files));
+        command.addAll(launchArguments(binary, projectRoot, sessionId, access, environment, files, cancelled));
         return new GeneralCommandLine(command)
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
                 .withWorkingDirectory(projectRoot)
