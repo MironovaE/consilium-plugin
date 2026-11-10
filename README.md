@@ -24,24 +24,26 @@ The one coordination rule: **only one agent may write to the repository per turn
 
 How read-only is enforced:
 
-- **Codex** runs with the `read-only` sandbox and `approval_policy="never"`, also when resuming a session. Without the second setting, an auto-approving reviewer in the user's Codex config could approve a write after the sandbox denied it.
-- **Claude Code** gets only the `Read`, `Glob` and `Grep` built-in tools. MCP tools stay available, and in non-interactive mode a tool call goes through only if it is pre-approved in the user's Claude settings, so do not pre-approve MCP tools that write if you rely on read-only discussion turns.
+- **Codex** runs with the `read-only` sandbox and `approval_policy="never"`, also when resuming a session. Without the second setting, an auto-approving reviewer in the user's Codex config could approve a write after the sandbox denied it. Every MCP server from your Codex configuration (user or project) is switched off for the turn, because MCP servers run outside the sandbox: Consilium lists them with `codex mcp list --json` first, and if that fails, or a server's name can't be switched off from the command line (only letters, digits, `_` and `-` can), the turn doesn't start and the card says why.
+- **Claude Code** gets only the `Read`, `Glob` and `Grep` built-in tools and runs with `--restricted`, `--strict-mcp-config` and `--permission-prompts none`: no MCP servers, no settings files from the repository (so a cloned repository's hooks can't run), and no tool call that would need approval. From your own `~/.claude/settings.json` only the model, effort, `env` and sign-in helpers (`apiKeyHelper`, AWS helpers) are passed back, through a temporary file readable only by you; hooks, permissions and plugins are not.
 
 Other details:
 
-- Answers stream as the CLI produces them. **Stop** cancels a turn; the partial answer stays in the transcript, marked as cut off.
-- In discussion modes each agent resumes its own CLI session and receives only the messages it has not seen yet. A "does" turn always starts a fresh session with the full transcript: a clean task context, with permissions set explicitly rather than inherited.
+- Answers stream as the CLI produces them. **Stop** ends the turn and everything the agent started (MCP servers, test runs, background commands); the partial answer stays in the transcript, marked as cut off. A new turn starts only after every process from the previous one has exited.
+- In discussion modes each agent resumes its own CLI session and receives only the messages it has not seen yet. A "does" turn always starts a fresh session with the full transcript: a clean task context, with permissions set explicitly rather than inherited. After it, that agent's next discussion turn starts fresh too, so it sees its own report of what it changed.
+- Each message reaches the agents as a tagged block, and only your blocks count as instructions. An agent that read a hostile file can't make the other one take its text for yours.
+- An agent that fails shows its error in red; errors are never passed to the other agent as something said.
 - Optional editor context attaches the open file's path and the current selection.
 - The transcript is stored per project, locally.
 
-Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent keeps its own settings, skills, and MCP servers. The plugin never reads or stores tokens.
+Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent uses your account and, in "does" turns, its own settings, skills, and MCP servers. The plugin never reads or stores tokens.
 
 The interface follows the IDE language: English by default, Russian when the IDE runs with a Russian locale. Agents are asked to reply in the language you write in.
 
 ## Requirements
 
 - IntelliJ IDEA 2026.1 or newer (build 261+)
-- `claude` and `codex` CLIs, installed and authenticated. The plugin looks in `~/.local/bin` first, then in `PATH`.
+- `claude` and `codex` CLIs, installed and authenticated. The plugin looks in `~/.local/bin` first, then in your login shell's `PATH`, so CLIs from Homebrew or npm are found even when the IDE was started from the Dock. A CLI found inside the project folder is never run.
 - Developed and tested on macOS. Other platforms may work but have not been tried.
 
 ## Install
@@ -66,26 +68,31 @@ The agents work in the project's root folder, so ask about the repository direct
 
 ## Troubleshooting
 
-- **"Couldn't start … CLI".** The plugin couldn't find the executable. It checks `~/.local/bin` and then the IDE's `PATH`. On macOS an IDE launched from the Dock or Finder doesn't inherit your shell's `PATH`, so a CLI installed through Homebrew or npm may be missing. Link it into `~/.local/bin` (for example `ln -s "$(which codex)" ~/.local/bin/codex`) and send the message again.
-- **"… CLI exited with code …".** Run the same CLI in a terminal: usually it isn't signed in (`claude`, then `/login`; `codex login`) or it was updated and its flags changed. The error text names the class that builds the command.
-- **An agent changed nothing in a "does" turn.** Check the mode: in **Both discuss** and **… answers** both agents are read-only by design.
+- **"Couldn't start … CLI".** The executable wasn't found in `~/.local/bin` or in your login shell's `PATH`. Check that `which claude` / `which codex` prints a path in a new terminal window, or link the CLI into `~/.local/bin` (for example `ln -s "$(which codex)" ~/.local/bin/codex`), then send the message again.
+- **"… CLI exited with code …" or "… ended the turn with an error".** The message shows what the CLI reported. Most often it isn't signed in (run `claude` and then `/login`, or `codex login`) or a CLI update changed its flags; in that case the error points to the code that builds the command.
+- **An agent didn't change anything.** Check the mode: in **Both discuss** and **… answers** the agents are read-only by design. Only **… does** can edit the project.
+- **"Open a project folder to use Consilium".** The tool window was opened without a project folder; agents always work inside one.
+
+## Security and privacy
+
+- Messages, the transcript the agents need, and the editor context (file path and selection) go to Anthropic and OpenAI through their CLIs, exactly as if you typed them there. Uncheck **editor context** to send the message alone.
+- The transcript is stored in plain text in the project's `.idea/workspace.xml`, which IDEA's default `.idea/.gitignore` keeps out of git. **Clear** removes it there; the CLIs keep their own session logs in `~/.claude` and `~/.codex`.
+- Answers are shown with raw HTML removed: nothing in an answer can load an image or any other URL, and only `http`, `https` and `mailto` links open, on click.
+- A **does** turn runs the agent in its own auto-approval mode inside the project: it can edit files and run commands. Use it in repositories you trust.
 
 ## Build from source
 
-The build compiles against a local IDEA installation. The default path is set in `gradle.properties`; override it if yours differs:
-
 ```bash
-JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home" \
-  ./gradlew test buildPlugin -PideaPath="/Applications/IntelliJ IDEA.app"
+./gradlew test buildPlugin
 ```
 
-The plugin ZIP lands in `build/distributions/`.
+The plugin ZIP lands in `build/distributions/`. The build compiles against the IDEA installation at `ideaPath` in `gradle.properties` (pass `-PideaPath=…` if yours is elsewhere); without one, it downloads IntelliJ IDEA `platformVersion`. Gradle needs a JDK 17+ to start and fetches the JDK 25 toolchain itself if it isn't installed; IDEA's bundled runtime works too: `JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home"`.
 
 ## Status
 
-MVP, version 0.3.1. Open questions are tracked in [BACKLOG.md](BACKLOG.md).
+MVP, version 0.3.2. Open questions and deliberate decisions are tracked in [BACKLOG.md](BACKLOG.md).
 
-The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.319, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
+The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.322, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
 
 ## License
 
