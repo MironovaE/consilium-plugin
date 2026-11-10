@@ -105,14 +105,38 @@ public final class GitCliWorktrees implements GitWorktrees {
 
     @Override
     public List<String> commitsSinceCreated(Worktree worktree) throws IOException {
-        String log = git().output(worktree.path(), "log", "--reverse", "--format=%h %s",
-                worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--");
+        String log = git().output(worktree.path(), inAgentCopy("log", "--reverse", "--format=%h %s",
+                worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--"));
         return log.isEmpty() ? List.of() : log.lines().toList();
     }
 
     @Override
     public boolean hasUncommittedChanges(Worktree worktree) throws IOException {
-        return hasUncommittedChanges(worktree.path());
+        return !git().output(worktree.path(), inAgentCopy("status", "--porcelain=v1", "--untracked-files=normal")).isEmpty();
+    }
+
+    @Override
+    public boolean owns(Path path) {
+        Path normalized = path.toAbsolutePath().normalize();
+        return !normalized.equals(baseDirectory) && normalized.startsWith(baseDirectory);
+    }
+
+    /**
+     * Git arguments for a command run inside an agent's copy, which holds files the agent wrote
+     * outside any sandbox Consilium controls. A repository with a relative {@code core.hooksPath}
+     * (husky's {@code .husky}) takes its hooks from those files, and the pre-commit framework reads its
+     * config from them, so a hook the agent edited would run as the person. Hooks point at an empty
+     * directory (--no-verify alone still runs post-commit), and fsmonitor is off.
+     */
+    private String[] inAgentCopy(String... arguments) throws IOException {
+        Path noHooks = Files.createDirectories(baseDirectory.resolve(".no-hooks"));
+        String[] full = new String[arguments.length + 4];
+        full[0] = "-c";
+        full[1] = "core.hooksPath=" + noHooks;
+        full[2] = "-c";
+        full[3] = "core.fsmonitor=false";
+        System.arraycopy(arguments, 0, full, 4, arguments.length);
+        return full;
     }
 
     /**
@@ -161,12 +185,12 @@ public final class GitCliWorktrees implements GitWorktrees {
 
     @Override
     public boolean commitAll(Worktree worktree, String message) throws IOException {
-        git().output(worktree.path(), "add", "-A");
-        Git.Result staged = git().run(worktree.path(), "diff", "--cached", "--quiet");
+        git().output(worktree.path(), inAgentCopy("add", "-A"));
+        Git.Result staged = git().run(worktree.path(), inAgentCopy("diff", "--cached", "--quiet"));
         if (staged.exitCode() == 0) return false;
         if (staged.exitCode() != 1) throw Git.failure(staged, "diff", "--cached", "--quiet");
         // -m takes the next argument as the message even if it starts with a dash.
-        git().output(worktree.path(), "commit", "-q", "-m", message);
+        git().output(worktree.path(), inAgentCopy("commit", "-q", "--no-verify", "-m", message));
         return true;
     }
 

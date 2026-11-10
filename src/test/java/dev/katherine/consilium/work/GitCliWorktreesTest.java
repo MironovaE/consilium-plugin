@@ -95,6 +95,37 @@ class GitCliWorktreesTest {
     }
 
     @Test
+    void commitAllNeverRunsAHookTheAgentWroteInItsCopy() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        // husky-style: hooks come from tracked files, so an agent's copy carries its own.
+        git(repo, "config", "core.hooksPath", ".husky");
+        Worktree worktree = worktrees.create(repo, "codex");
+        Path pwned = dir.resolve("pwned");
+        for (String hook : new String[] {"pre-commit", "commit-msg", "post-commit"}) {
+            Path script = worktree.path().resolve(".husky").resolve(hook);
+            Files.createDirectories(script.getParent());
+            Files.writeString(script, "#!/bin/sh\necho " + hook + " >> '" + pwned + "'\n");
+            assertTrue(script.toFile().setExecutable(true));
+        }
+        Files.writeString(worktree.path().resolve("part.txt"), "the agent's work");
+
+        assertTrue(worktrees.commitAll(worktree, "chore(consilium): codex part of a parallel task"));
+
+        assertFalse(Files.exists(pwned), "no hook from the agent's copy ran");
+        assertEquals(List.of(), worktrees.commitsSinceCreated(worktree).stream().filter(c -> !c.contains("codex part")).toList());
+        assertEquals(1, worktrees.commitsSinceCreated(worktree).size());
+        assertFalse(worktrees.hasUncommittedChanges(worktree));
+    }
+
+    @Test
+    void ownsOnlyPathsInsideItsBaseDirectory() {
+        assertTrue(worktrees.owns(base.resolve("repo-1234/claude-1")));
+        assertFalse(worktrees.owns(base));
+        assertFalse(worktrees.owns(dir.resolve("elsewhere")));
+        assertFalse(worktrees.owns(base.resolve("../escape")));
+    }
+
+    @Test
     void removeDeletesABranchWhoseWorkWasRewrittenIntoHead() throws IOException {
         Path repo = TestRepositories.init(dir.resolve("repo"), true);
         Worktree worktree = worktrees.create(repo, "claude");

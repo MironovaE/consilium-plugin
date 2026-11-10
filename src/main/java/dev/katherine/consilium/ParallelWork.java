@@ -82,10 +82,22 @@ final class ParallelWork {
         }
     }
 
-    /** The parts whose branches still exist; the person may have merged or deleted some by hand. */
+    /** The parts whose worktrees lie where Consilium makes them; anything else came from a tampered record. */
+    List<PendingWork> owned(List<PendingWork> parts) {
+        List<PendingWork> owned = new ArrayList<>();
+        for (PendingWork part : parts) {
+            if (git.owns(Path.of(part.path))) owned.add(part);
+        }
+        return owned;
+    }
+
+    /**
+     * The parts whose branches still exist; the person may have merged or deleted some by hand. If
+     * git can't be asked right now, every part is kept: a passing failure must not erase the record.
+     */
     List<PendingWork> stillThere(Path projectRoot, List<PendingWork> parts) {
         Path repository = repositoryOrNull(projectRoot);
-        if (repository == null) return List.of();
+        if (repository == null) return parts;
         List<PendingWork> present = new ArrayList<>();
         for (PendingWork part : parts) {
             try {

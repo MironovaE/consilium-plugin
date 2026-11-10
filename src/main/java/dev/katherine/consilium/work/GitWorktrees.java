@@ -41,6 +41,12 @@ public interface GitWorktrees {
      */
     boolean commitAll(Worktree worktree, String message) throws IOException;
 
+    /**
+     * True if {@code path} lies inside the directory where this service creates worktrees. Stored
+     * records come back from workspace.xml, and git must never be run in a folder they merely name.
+     */
+    boolean owns(Path path);
+
     /** True if the branch still exists; the person may have merged or deleted it by hand. */
     boolean branchExists(Path repositoryRoot, String branch) throws IOException;
 

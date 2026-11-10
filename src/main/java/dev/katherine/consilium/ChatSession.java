@@ -182,8 +182,11 @@ final class ChatSession {
         this.ui = ui;
         this.background = background;
         this.view = view;
+        // Records come back from workspace.xml; only worktrees in Consilium's own folder are trusted.
+        List<PendingWork> recorded = store.pendingWork();
+        List<PendingWork> waiting = parallelWork.owned(recorded);
+        if (waiting.size() != recorded.size()) store.setPendingWork(waiting);
         // After a restart, say once that work is still waiting on its branches.
-        List<PendingWork> waiting = store.pendingWork();
         if (!waiting.isEmpty()) {
             String text = ConsiliumBundle.message("notice.pending", branches(waiting));
             List<ChatMessage> messages = store.messages();
@@ -274,7 +277,9 @@ final class ChatSession {
             }
             ParallelWork.Prepared ready = prepared;
             String reason = refusal;
-            // Closed or stopped while the copies were being made: they hold nothing yet, so they go.
+            // Closed while the copies were being made: they hold nothing yet, so they go. If the
+            // project closes in the moment between this check and the UI callback, the copies stay
+            // unrecorded on disk; git keeps listing them (git worktree list) and nothing is lost.
             if (ready != null && disposed) {
                 parallelWork.discard(projectRoot, parts(ready));
                 return;
@@ -348,25 +353,31 @@ final class ChatSession {
         });
     }
 
-    /** "Merge": check the branches are still there and the project is clean, then merge. */
+    /**
+     * "Merge": commit whatever a stopped or failed part left in its copy (agents never commit there),
+     * check the branches are still there and the project is clean, then merge the parts that hold work.
+     */
     private void mergeWhenReady(Speaker integrator) {
         List<PendingWork> recorded = store.pendingWork();
         Object step = beginStep();
         background.execute(() -> {
-            List<PendingWork> parts = parallelWork.stillThere(projectRoot, recorded);
-            boolean dirty = !parts.isEmpty() && parallelWork.projectIsDirty(projectRoot);
+            List<PendingWork> present = parallelWork.stillThere(projectRoot, recorded);
+            parallelWork.commitParts(present, Map.of());
+            List<Speaker> idle = parallelWork.withoutCommits(present);
+            List<PendingWork> withWork = present.stream().filter(part -> !idle.contains(part.agentValue())).toList();
+            boolean dirty = !withWork.isEmpty() && parallelWork.projectIsDirty(projectRoot);
             onUi(() -> {
                 if (!endStep(step)) {
                     view.stateChanged(state());
                     return;
                 }
-                store.setPendingWork(parts);
-                if (parts.isEmpty()) {
+                store.setPendingWork(present);
+                if (withWork.isEmpty()) {
                     notice(ConsiliumBundle.message("notice.merge.nothing"));
                 } else if (dirty) {
-                    notice(ConsiliumBundle.message("notice.merge.dirty", branches(parts)));
+                    notice(ConsiliumBundle.message("notice.merge.dirty", branches(withWork)));
                 } else {
-                    startMerge(integrator, parts);
+                    startMerge(integrator, withWork);
                 }
                 view.stateChanged(state());
             });

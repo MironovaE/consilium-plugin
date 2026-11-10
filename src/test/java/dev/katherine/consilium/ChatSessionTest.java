@@ -6,6 +6,7 @@ import dev.katherine.consilium.cli.CliAgent;
 import dev.katherine.consilium.cli.RunningRequest;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.MessageStatus;
+import dev.katherine.consilium.model.PendingWork;
 import dev.katherine.consilium.model.Speaker;
 import dev.katherine.consilium.intent.Intent;
 import dev.katherine.consilium.intent.IntentClassifier;
@@ -213,6 +214,11 @@ class ChatSessionTest {
         public boolean commitAll(Worktree worktree, String message) {
             committed.add(worktree.branch() + ": " + message);
             return true;
+        }
+
+        @Override
+        public boolean owns(Path path) {
+            return path.startsWith("/wt");
         }
 
         @Override
@@ -733,5 +739,26 @@ class ChatSessionTest {
         session.send("what now?", TurnMode.AUTO, "");
 
         assertFalse(claude().last().prompt.contains(ConsiliumBundle.message("notice.unclear")), claude().last().prompt);
+    }
+
+    @Test
+    void mergeAfterAStoppedPartCommitsWhatItLeftFirst() {
+        failBothParts();
+        git.committed.clear();
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
+
+        session.send("merge what's there", TurnMode.AUTO, "");
+
+        assertEquals(2, git.committed.size(), "the parts are committed before the merge");
+        assertTrue(claude().last().prompt.contains("consilium/claude-1"), claude().last().prompt);
+    }
+
+    @Test
+    void aRecordPointingOutsideConsiliumsFolderIsDropped() {
+        store.setPendingWork(List.of(new PendingWork(Speaker.CODEX, "/Users/someone/project", "consilium/codex-1", "0123abcd")));
+
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+
+        assertTrue(store.pendingWork().isEmpty());
     }
 }
