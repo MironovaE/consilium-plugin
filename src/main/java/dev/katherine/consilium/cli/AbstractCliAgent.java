@@ -7,6 +7,7 @@ import com.intellij.util.EnvironmentUtil;
 import com.intellij.util.concurrency.AppExecutorUtil;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,6 +40,15 @@ abstract class AbstractCliAgent implements CliAgent {
     abstract CliEventParser newParser();
 
     /**
+     * The arguments for this launch. Runs on the agent's background thread, so an agent may consult
+     * the CLI first (Codex lists its MCP servers); throwing refuses the turn.
+     */
+    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
+                                 Map<String, String> environment) throws IOException {
+        return arguments(projectRoot, sessionId, access);
+    }
+
+    /**
      * Starts the CLI through {@link GeneralCommandLine} with the {@code CONSOLE} parent environment,
      * which is the login-shell environment the IDE loads at startup rather than the bare one an IDE
      * launched from the Dock inherits; the executable is looked up in that same PATH.
@@ -54,7 +64,7 @@ abstract class AbstractCliAgent implements CliAgent {
         Path binary = executable != null ? executable : ExecutableResolver.resolve(executableName, projectRoot, environment);
         List<String> command = new ArrayList<>();
         command.add(binary.toString());
-        command.addAll(arguments(projectRoot, sessionId, access));
+        command.addAll(launchArguments(binary, projectRoot, sessionId, access, environment));
         return new GeneralCommandLine(command)
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
                 .withWorkingDirectory(projectRoot)

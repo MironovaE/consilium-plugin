@@ -9,6 +9,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,6 +53,35 @@ class CliCommandTest {
         assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
                 "-c", "approval_policy=\"never\"", "--", "s1", "-"),
                 new CodexCliAgent().arguments(ROOT, "s1", AgentAccess.READ_ONLY));
+    }
+
+    @Test
+    void codexReadOnlySwitchesOffListedMcpServers() {
+        CodexCliAgent agent = new CodexCliAgent();
+        assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
+                "-c", "mcp_servers.idea.enabled=false", "-c", "mcp_servers.mui-mcp.enabled=false",
+                "--cd", "/project", "--", "-"),
+                agent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")));
+        assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
+                "-c", "approval_policy=\"never\"", "-c", "mcp_servers.idea.enabled=false", "--", "s1", "-"),
+                agent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of("idea")));
+        assertEquals(agent.arguments(ROOT, null, AgentAccess.WRITE),
+                agent.arguments(ROOT, null, AgentAccess.WRITE, List.of("idea")));
+    }
+
+    @Test
+    void mcpListingKeepsOnlyEnabledBareKeyNames() throws TurnRefusedException {
+        assertEquals(List.of("idea", "mui-mcp", "a_1"), CodexMcpServers.parse(
+                "[{\"name\":\"idea\",\"enabled\":true,\"transport\":{}},{\"name\":\"off\",\"enabled\":false},"
+                        + "{\"name\":\"mui-mcp\",\"enabled\":true},{\"name\":\"a_1\",\"enabled\":true}]"));
+        assertEquals(List.of(), CodexMcpServers.parse("[]"));
+        // A disabled server with an odd name needs no override, so it doesn't block the turn.
+        assertEquals(List.of(), CodexMcpServers.parse("[{\"name\":\"a.b\",\"enabled\":false}]"));
+        for (String bad : List.of("", "null", "{}", "[1]", "[{\"name\":\"a b\",\"enabled\":true}]",
+                "[{\"name\":\"a.b\",\"enabled\":true}]", "[{\"name\":\"\\\"x\\\"\",\"enabled\":true}]",
+                "[{\"name\":{},\"enabled\":true}]", "[{\"name\":\"x\",\"enabled\":\"yes\"}]")) {
+            assertThrows(TurnRefusedException.class, () -> CodexMcpServers.parse(bad), bad);
+        }
     }
 
     @Test

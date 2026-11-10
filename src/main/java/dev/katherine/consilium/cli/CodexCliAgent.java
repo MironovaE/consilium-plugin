@@ -6,17 +6,23 @@ import com.google.gson.JsonObject;
 import dev.katherine.consilium.model.Speaker;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public final class CodexCliAgent extends AbstractCliAgent {
+    private final Duration mcpListTimeout;
+
     public CodexCliAgent() {
-        this(null);
+        this(null, CodexMcpServers.LIST_TIMEOUT);
     }
 
-    CodexCliAgent(@Nullable Path executable) {
+    CodexCliAgent(@Nullable Path executable, Duration mcpListTimeout) {
         super("codex", executable);
+        this.mcpListTimeout = mcpListTimeout;
     }
 
     @Override
@@ -24,12 +30,23 @@ public final class CodexCliAgent extends AbstractCliAgent {
         return Speaker.CODEX;
     }
 
-    // MCP servers from the user's Codex config still start in read-only turns and run outside the
-    // sandbox. `-c mcp_servers={}` is accepted but merges into the configured table instead of
-    // replacing it (checked with `codex -c 'mcp_servers={}' mcp list` on codex-cli 0.167.0), and
-    // --ignore-user-config would also drop the user's model and profile, so there is no flag here.
+    // MCP servers from the user's (and the project's) Codex config start for every turn and run
+    // outside the sandbox, so a read-only turn switches each of them off; see CodexMcpServers.
+    @Override
+    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
+                                 Map<String, String> environment) throws IOException {
+        if (access != AgentAccess.READ_ONLY) return arguments(projectRoot, sessionId, access);
+        List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout);
+        return arguments(projectRoot, sessionId, access, servers);
+    }
+
     @Override
     List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access) {
+        return arguments(projectRoot, sessionId, access, List.of());
+    }
+
+    /** {@code mcpServersToDisable} only applies to read-only turns. */
+    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access, List<String> mcpServersToDisable) {
         List<String> command = new ArrayList<>();
         command.add("exec");
         String resumable = access == AgentAccess.READ_ONLY ? SessionIds.resumable(sessionId) : null;
@@ -41,6 +58,7 @@ public final class CodexCliAgent extends AbstractCliAgent {
             command.add("-c");
             command.add("sandbox_mode=\"read-only\"");
             addNoEscalation(command);
+            command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
             // `--` keeps the session id a positional even if validation ever lets a dash through.
             command.add("--");
             command.add(resumable);
@@ -49,7 +67,10 @@ public final class CodexCliAgent extends AbstractCliAgent {
             command.add("--json");
             command.add("--sandbox");
             command.add(access == AgentAccess.WRITE ? "workspace-write" : "read-only");
-            if (access == AgentAccess.READ_ONLY) addNoEscalation(command);
+            if (access == AgentAccess.READ_ONLY) {
+                addNoEscalation(command);
+                command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
+            }
             command.add("--cd");
             command.add(projectRoot.toString());
             command.add("--");

@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -57,10 +58,19 @@ class CliRunTest {
     }
 
     private Path script(String body) throws IOException {
+        return script("echo '[]'", body);
+    }
+
+    /** A fake CLI; {@code mcpList} answers `codex mcp list --json`, which read-only Codex turns run first. */
+    private Path script(String mcpList, String body) throws IOException {
         Path script = dir.resolve("fake-cli-" + System.nanoTime());
-        Files.writeString(script, "#!/bin/sh\n" + body + "\n");
+        Files.writeString(script, "#!/bin/sh\nif [ \"$1\" = mcp ]; then\n" + mcpList + "\nexit $?\nfi\n" + body + "\n");
         assertTrue(script.toFile().setExecutable(true));
         return script;
+    }
+
+    private static CodexCliAgent codex(Path cli) {
+        return new CodexCliAgent(cli, Duration.ofSeconds(1));
     }
 
     private Path project() throws IOException {
@@ -172,7 +182,7 @@ class CliRunTest {
                 + "echo '" + CODEX_COMPLETED + "'\nwait");
         Recorder listener = new Recorder();
         long started = System.nanoTime();
-        RunningRequest request = new CodexCliAgent(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
         assertEquals("completed", listener.awaitOutcome());
         assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < CliRun.ROOT_EXIT_GRACE.toSeconds(),
@@ -198,7 +208,7 @@ class CliRunTest {
         Path cli = script("cat > /dev/null\nsleep 300 &\necho $! > '" + dir.resolve("child.pid") + "'\n"
                 + "sleep 1\necho 'panic: something broke'\nexit 101");
         Recorder listener = new Recorder();
-        RunningRequest request = new CodexCliAgent(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
         assertEquals("error:panic: something broke", listener.awaitOutcome());
         awaitTerminated(request);
@@ -225,7 +235,7 @@ class CliRunTest {
                 + "echo '{\"type\":\"error\",\"message\":\"Reconnecting... 1/5\"}'\n"
                 + "echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"The model is not supported.\"}}'\nexit 1");
         Recorder listener = new Recorder();
-        RunningRequest request = new CodexCliAgent(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
         assertEquals("error:The model is not supported.", listener.awaitOutcome());
         assertEquals(List.of("session:t-1", "error:The model is not supported."), listener.events());
@@ -237,7 +247,7 @@ class CliRunTest {
         Path cli = script("cat > /dev/null\necho 'some log line'\n"
                 + "echo '{\"type\":\"error\",\"message\":\"stream disconnected\"}'\nexit 1");
         Recorder listener = new Recorder();
-        RunningRequest request = new CodexCliAgent(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
 
         assertEquals("error:stream disconnected", listener.awaitOutcome());
         awaitTerminated(request);
@@ -248,7 +258,7 @@ class CliRunTest {
         Path args = dir.resolve("args");
         Path cli = script("cat > /dev/null\nprintf '%s\\n' \"$@\" > '" + args + "'\necho '" + CODEX_COMPLETED + "'");
         Recorder listener = new Recorder();
-        RunningRequest request = new CodexCliAgent(cli).start(project(), "prompt",
+        RunningRequest request = codex(cli).start(project(), "prompt",
                 "--dangerously-bypass-approvals-and-sandbox", AgentAccess.READ_ONLY, listener);
 
         assertEquals("completed", listener.awaitOutcome());
@@ -267,6 +277,59 @@ class CliRunTest {
 
         assertTrue(listener.awaitOutcome().startsWith("error:"));
         awaitTerminated(request);
+    }
+
+    @Test
+    void codexReadOnlyTurnSwitchesOffEveryEnabledMcpServer() throws Exception {
+        Path args = dir.resolve("args");
+        String listing = "[{\"name\":\"idea\",\"enabled\":true},{\"name\":\"off\",\"enabled\":false},"
+                + "{\"name\":\"mui-mcp\",\"enabled\":true}]";
+        Path cli = script("pwd -P > '" + dir.resolve("mcp.cwd") + "'\necho '" + listing + "'",
+                "cat > /dev/null\nprintf '%s\\n' \"$@\" > '" + args + "'\necho '" + CODEX_COMPLETED + "'");
+        Recorder listener = new Recorder();
+        RunningRequest request = codex(cli).start(project(), "prompt", "s1", AgentAccess.READ_ONLY, listener);
+
+        assertEquals("completed", listener.awaitOutcome());
+        awaitTerminated(request);
+        assertEquals(new CodexCliAgent().arguments(project(), "s1", AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")),
+                Files.readAllLines(args));
+        // Project config can add servers, so the listing must run where the turn runs.
+        assertEquals(project().toRealPath().toString(), Files.readString(dir.resolve("mcp.cwd")).strip());
+    }
+
+    @Test
+    void codexWriteTurnDoesNotListMcpServers() throws Exception {
+        Path cli = script("touch '" + dir.resolve("listed") + "'\necho '[]'", "cat > /dev/null\necho '" + CODEX_COMPLETED + "'");
+        Recorder listener = new Recorder();
+        RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.WRITE, listener);
+
+        assertEquals("completed", listener.awaitOutcome());
+        awaitTerminated(request);
+        assertFalse(Files.exists(dir.resolve("listed")));
+    }
+
+    @Test
+    void codexReadOnlyTurnIsRefusedWhenMcpServersCannotBeListed() throws Exception {
+        String[] listings = {
+                "echo 'Error: failed to load configuration' >&2\nexit 1",
+                "echo 'not json'",
+                "echo '{\"servers\":[]}'",
+                "echo '[{\"name\":\"a.b\",\"enabled\":true}]'",
+                "echo '[{\"name\":\"q\\\"x\",\"enabled\":true}]'",
+                "echo '[{\"name\":\"idea\"}]'",
+                "exec sleep 30",
+        };
+        for (String listing : listings) {
+            Path ran = dir.resolve("ran");
+            Path cli = script(listing, "touch '" + ran + "'\necho '" + CODEX_COMPLETED + "'");
+            Recorder listener = new Recorder();
+            RunningRequest request = codex(cli).start(project(), "prompt", null, AgentAccess.READ_ONLY, listener);
+
+            String outcome = listener.awaitOutcome();
+            assertTrue(outcome.startsWith("error:Consilium couldn't list the Codex MCP servers"), listing + " -> " + outcome);
+            awaitTerminated(request);
+            assertFalse(Files.exists(ran), "the turn must not start: " + listing);
+        }
     }
 
     @Test

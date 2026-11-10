@@ -106,6 +106,10 @@ final class CliRun implements RunningRequest {
         Process process;
         try {
             process = launcher.launch();
+        } catch (TurnRefusedException exception) {
+            settle(exception.getMessage());
+            terminated.complete(null);
+            return;
         } catch (Exception exception) {
             settle(ConsiliumBundle.message("error.launch", label, messageOf(exception)));
             terminated.complete(null);
