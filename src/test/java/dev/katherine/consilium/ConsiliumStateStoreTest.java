@@ -12,7 +12,7 @@ class ConsiliumStateStoreTest {
     private static ConsiliumSnapshot snapshotOf(int count) {
         ConsiliumSnapshot snapshot = new ConsiliumSnapshot();
         for (int index = 0; index < count; index++) {
-            snapshot.messages.add(new ChatMessage("m" + index, Speaker.KATHERINE, "text " + index, index));
+            snapshot.messages.add(new ChatMessage("m" + index, Speaker.USER, "text " + index, index));
         }
         return snapshot;
     }

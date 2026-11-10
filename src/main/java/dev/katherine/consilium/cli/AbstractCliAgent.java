@@ -1,5 +1,7 @@
 package dev.katherine.consilium.cli;
 
+import dev.katherine.consilium.ConsiliumBundle;
+
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.intellij.util.concurrency.AppExecutorUtil;
@@ -59,16 +61,16 @@ abstract class AbstractCliAgent implements CliAgent {
                     listener.onCompleted();
                 } else {
                     String detail = nonJsonOutput.toString().trim();
-                    String message = detail.isEmpty() ? speaker().label() + " CLI завершился с кодом " + exitCode : detail;
+                    String message = detail.isEmpty() ? ConsiliumBundle.message("error.exit.code", speaker().label(), exitCode) : detail;
                     listener.onError(message + flagHint(detail));
                 }
             } catch (IOException exception) {
                 if (!cancelled.get()) {
-                    listener.onError("Не удалось запустить " + speaker().label() + " CLI: " + exception.getMessage());
+                    listener.onError(ConsiliumBundle.message("error.launch", speaker().label(), exception.getMessage()));
                 }
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
-                if (!cancelled.get()) listener.onError(speaker().label() + " был прерван");
+                if (!cancelled.get()) listener.onError(ConsiliumBundle.message("error.interrupted", speaker().label()));
             } catch (RuntimeException exception) {
                 if (!cancelled.get()) listener.onError(speaker().label() + ": " + exception.getMessage());
             }
@@ -108,8 +110,7 @@ abstract class AbstractCliAgent implements CliAgent {
                 || lower.contains("unrecognized option")
                 || lower.contains("unrecognized argument");
         return looksLikeFlagError
-                ? "\n\nПохоже, версия CLI не принимает флаги плагина. Сверь с `--help` команду в "
-                  + "ClaudeCliAgent/CodexCliAgent.command."
+                ? ConsiliumBundle.message("error.flag.hint")
                 : "";
     }
 

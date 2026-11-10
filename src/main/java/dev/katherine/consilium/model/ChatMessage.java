@@ -21,7 +21,8 @@ public final class ChatMessage {
         try {
             return Speaker.valueOf(speaker);
         } catch (IllegalArgumentException | NullPointerException ignored) {
-            return Speaker.KATHERINE;
+            // Транскрипты до 0.3.0 хранят человека как KATHERINE — это тот же USER.
+            return Speaker.USER;
         }
     }
 }

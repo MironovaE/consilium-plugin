@@ -16,10 +16,10 @@ class ConversationPromptBuilderTest {
     }
 
     private static final List<ChatMessage> TRANSCRIPT = List.of(
-            msg(Speaker.KATHERINE, "первый вопрос"),
+            msg(Speaker.USER, "первый вопрос"),
             msg(Speaker.CLAUDE, "ответ клода"),
             msg(Speaker.CODEX, "ответ кодекса"),
-            msg(Speaker.KATHERINE, "второй вопрос")
+            msg(Speaker.USER, "второй вопрос")
     );
 
     @Test
@@ -27,12 +27,12 @@ class ConversationPromptBuilderTest {
         String prompt = ConversationPromptBuilder.build(
                 TRANSCRIPT, Speaker.CLAUDE, 0, true, "", AgentAccess.READ_ONLY);
 
-        assertTrue(prompt.contains("режим обсуждения"));
+        assertTrue(prompt.contains("discussion turn"));
         assertTrue(prompt.contains("первый вопрос"));
         assertTrue(prompt.contains("ответ клода"));
         assertTrue(prompt.contains("ответ кодекса"));
         assertTrue(prompt.contains("второй вопрос"));
-        assertTrue(prompt.endsWith("Твоя очередь, Claude."));
+        assertTrue(prompt.endsWith("Your turn, Claude."));
     }
 
     @Test
@@ -40,7 +40,7 @@ class ConversationPromptBuilderTest {
         String prompt = ConversationPromptBuilder.build(
                 TRANSCRIPT, Speaker.CLAUDE, 1, false, "", AgentAccess.READ_ONLY);
 
-        assertTrue(prompt.contains("Новые реплики"));
+        assertTrue(prompt.contains("New messages"));
         assertFalse(prompt.contains("первый вопрос"), "реплики до seenThrough уже видел");
         assertFalse(prompt.contains("ответ клода"), "свои реплики агент не перечитывает");
         assertTrue(prompt.contains("ответ кодекса"), "позицию второго агента — видит");
@@ -52,10 +52,10 @@ class ConversationPromptBuilderTest {
         String prompt = ConversationPromptBuilder.build(
                 TRANSCRIPT, Speaker.CODEX, 3, false, "", AgentAccess.WRITE);
 
-        assertTrue(prompt.contains("правом изменять репозиторий"));
+        assertTrue(prompt.contains("only agent allowed to change the repository"));
         assertTrue(prompt.contains("первый вопрос"), "write-ход всегда с полным транскриптом");
         assertTrue(prompt.contains("ответ кодекса"), "в write свои реплики не фильтруются");
-        assertTrue(prompt.endsWith("Твоя очередь, Codex."));
+        assertTrue(prompt.endsWith("Your turn, Codex."));
     }
 
     @Test
@@ -63,7 +63,7 @@ class ConversationPromptBuilderTest {
         String prompt = ConversationPromptBuilder.build(
                 TRANSCRIPT, Speaker.CODEX, TRANSCRIPT.size(), false, "", AgentAccess.READ_ONLY);
 
-        assertTrue(prompt.contains("Katherine ждёт твоего ответа"));
+        assertTrue(prompt.contains("The user is waiting for your answer"));
     }
 
     @Test
@@ -71,6 +71,13 @@ class ConversationPromptBuilderTest {
         String prompt = ConversationPromptBuilder.build(
                 TRANSCRIPT, Speaker.CLAUDE, 0, true, "Файл: /x/y.py", AgentAccess.READ_ONLY);
 
-        assertTrue(prompt.contains("Контекст из редактора IDEA:\nФайл: /x/y.py"));
+        assertTrue(prompt.contains("Context from the IDE editor:\nФайл: /x/y.py"));
+    }
+
+    @Test
+    void agentsSeeTheHumanAsUser() {
+        String prompt = ConversationPromptBuilder.build(TRANSCRIPT, Speaker.CLAUDE, 0, true, "", AgentAccess.READ_ONLY);
+        assertTrue(prompt.contains("User:\nпервый вопрос"), prompt);
+        assertFalse(prompt.contains("Katherine"), prompt);
     }
 }

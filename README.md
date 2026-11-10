@@ -36,7 +36,7 @@ Other details:
 
 Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent keeps its own settings, skills, and MCP servers. The plugin never reads or stores tokens.
 
-The interface text is in Russian.
+The interface follows the IDE language: English by default, Russian when the IDE runs with a Russian locale. Agents are asked to reply in the language you write in.
 
 ## Requirements
 

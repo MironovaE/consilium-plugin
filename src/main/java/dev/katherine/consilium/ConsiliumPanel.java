@@ -40,21 +40,21 @@ final class ConsiliumPanel implements Disposable {
     }
 
     private enum Target {
-        BOTH("Оба обсуждают"),
-        CLAUDE("Claude отвечает"),
-        CODEX("Codex отвечает"),
-        CLAUDE_WRITES("Claude делает"),
-        CODEX_WRITES("Codex делает");
+        BOTH("target.both"),
+        CLAUDE("target.claude"),
+        CODEX("target.codex"),
+        CLAUDE_WRITES("target.claude.writes"),
+        CODEX_WRITES("target.codex.writes");
 
-        private final String label;
+        private final String key;
 
-        Target(String label) {
-            this.label = label;
+        Target(String key) {
+            this.key = key;
         }
 
         @Override
         public String toString() {
-            return label;
+            return ConsiliumBundle.message(key);
         }
     }
 
@@ -66,11 +66,11 @@ final class ConsiliumPanel implements Disposable {
     private final JBScrollPane transcriptScroll;
     private final JBTextArea input = new JBTextArea(4, 20);
     private final ComboBox<Target> target = new ComboBox<>(Target.values());
-    private final JBCheckBox includeEditorContext = new JBCheckBox("контекст редактора", true);
-    private final JButton send = new JButton("Отправить");
-    private final JButton stop = new JButton("Стоп");
-    private final JButton clear = new JButton("Очистить");
-    private final JBLabel status = new JBLabel("Готов к обсуждению или работе");
+    private final JBCheckBox includeEditorContext = new JBCheckBox(ConsiliumBundle.message("checkbox.editor.context"), true);
+    private final JButton send = new JButton(ConsiliumBundle.message("button.send"));
+    private final JButton stop = new JButton(ConsiliumBundle.message("button.stop"));
+    private final JButton clear = new JButton(ConsiliumBundle.message("button.clear"));
+    private final JBLabel status = new JBLabel(ConsiliumBundle.message("status.ready"));
     // Держим и запрос, и карточку: Стоп должен честно пометить карточку
     // «остановлен», а не оставить её «думает…» навсегда.
     // settled — кто первым закрыл ход: ответ дошёл до конца или нажали «Стоп». Ответ, пришедший
@@ -78,7 +78,7 @@ final class ConsiliumPanel implements Disposable {
     private record ActiveRun(RunningRequest request, MessageCard card, AtomicBoolean settled) {
     }
 
-    static final String STOPPED_MARK = "[остановлено до конца ответа]";
+    static final String STOPPED_MARK = ConsiliumBundle.message("answer.stopped.mark");
 
     private final Map<Speaker, ActiveRun> running = new EnumMap<>(Speaker.class);
     private volatile boolean disposed;
@@ -123,7 +123,7 @@ final class ConsiliumPanel implements Disposable {
         inputScroll.setPreferredSize(new Dimension(100, JBUI.scale(76)));
 
         JPanel actions = new JPanel(new GridBagLayout());
-        addOnBaseline(actions, new JBLabel("Режим:"), 6, false);
+        addOnBaseline(actions, new JBLabel(ConsiliumBundle.message("label.mode")), 6, false);
         addOnBaseline(actions, target, 10, false);
         addOnBaseline(actions, includeEditorContext, 10, false);
         addOnBaseline(actions, send, 6, false);
@@ -186,7 +186,7 @@ final class ConsiliumPanel implements Disposable {
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setBorder(JBUI.Borders.empty(18, 12));
         card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
-        JBTextArea text = messageArea("Одна комната для Katherine, Claude и Codex.\nНапиши сообщение — оба получат один независимый снимок разговора.");
+        JBTextArea text = messageArea(ConsiliumBundle.message("welcome"));
         text.setForeground(JBColor.GRAY);
         card.add(text, BorderLayout.CENTER);
         messageList.add(card);
@@ -198,8 +198,8 @@ final class ConsiliumPanel implements Disposable {
         if (text.isEmpty()) return;
 
         if (store.messages().isEmpty()) messageList.removeAll();
-        store.add(Speaker.KATHERINE, text);
-        addMessageCard(Speaker.KATHERINE, text, false);
+        store.add(Speaker.USER, text);
+        addMessageCard(Speaker.USER, text, false);
         input.setText("");
 
         List<ChatMessage> snapshot = store.messages();
@@ -258,7 +258,7 @@ final class ConsiliumPanel implements Disposable {
             public void onCompleted() {
                 if (!settled.compareAndSet(false, true)) return;
                 String answer = text.toString().trim();
-                if (answer.isEmpty()) answer = "(пустой ответ)";
+                if (answer.isEmpty()) answer = ConsiliumBundle.message("answer.empty");
                 String finalAnswer = answer;
                 store.add(speaker, finalAnswer);
                 if (access == AgentAccess.READ_ONLY) {
@@ -274,11 +274,11 @@ final class ConsiliumPanel implements Disposable {
             @Override
             public void onError(String message) {
                 if (!settled.compareAndSet(false, true)) return;
-                String error = "Не получилось ответить: " + message;
+                String error = ConsiliumBundle.message("error.answer", message);
                 store.add(speaker, error);
                 onUi(() -> {
                     response.body().showError(error, JBColor.RED);
-                    response.name().setText(speaker.label() + " · ошибка");
+                    response.name().setText(ConsiliumBundle.message("card.error", speaker.label()));
                     finish(speaker);
                 });
             }
@@ -300,7 +300,7 @@ final class ConsiliumPanel implements Disposable {
         card.setBorder(cardBorder(speaker));
         card.setOpaque(false);
 
-        JBLabel name = new JBLabel(pending ? speaker.label() + " · думает…" : speaker.label());
+        JBLabel name = new JBLabel(pending ? ConsiliumBundle.message("card.thinking", speaker.label()) : speaker.label());
         name.setFont(name.getFont().deriveFont(Font.BOLD));
         name.setForeground(accent(speaker));
         MessageBody body = new MessageBody();
@@ -372,7 +372,7 @@ final class ConsiliumPanel implements Disposable {
 
     private static Color accent(Speaker speaker) {
         return switch (speaker) {
-            case KATHERINE -> new JBColor(new Color(177, 122, 16), new Color(231, 176, 70));
+            case USER -> new JBColor(new Color(177, 122, 16), new Color(231, 176, 70));
             case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
             case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
         };
@@ -381,12 +381,12 @@ final class ConsiliumPanel implements Disposable {
     private String editorContext() {
         Editor editor = FileEditorManager.getInstance(project).getSelectedTextEditor();
         if (editor == null) return "";
-        String path = editor.getVirtualFile() == null ? "текущий редактор" : editor.getVirtualFile().getPath();
+        String path = editor.getVirtualFile() == null ? ConsiliumBundle.message("context.current.editor") : editor.getVirtualFile().getPath();
         String selectedText = editor.getSelectionModel().getSelectedText();
         if (selectedText == null || selectedText.isBlank()) {
-            return "Открыт файл: " + path + " (текст не прикреплён — выделения нет).";
+            return ConsiliumBundle.message("context.file.no.selection", path);
         }
-        return "Файл: " + path + "\n```\n" + selectedText + "\n```";
+        return ConsiliumBundle.message("context.file", path) + "\n```\n" + selectedText + "\n```";
     }
 
     private void finish(Speaker speaker) {
@@ -401,7 +401,7 @@ final class ConsiliumPanel implements Disposable {
         clear.setEnabled(!busy);
         stop.setEnabled(busy);
         target.setEnabled(!busy);
-        status.setText(busy ? "Consilium работает…" : "Готов к обсуждению или работе");
+        status.setText(ConsiliumBundle.message(busy ? "status.working" : "status.ready"));
     }
 
     private void cancelAll() {
@@ -411,7 +411,7 @@ final class ConsiliumPanel implements Disposable {
             // Партиал оставляем видимым, но карточка перестаёт врать «думает…»:
             // отменённый агент listener'а уже не позовёт.
             MessageCard card = entry.getValue().card();
-            card.name().setText(entry.getKey().label() + " · остановлен");
+            card.name().setText(ConsiliumBundle.message("card.stopped", entry.getKey().label()));
             // И сохраняем его с пометкой, иначе после перезапуска IDEA он пропадёт.
             String partial = card.body().markdown().trim();
             if (!partial.isEmpty()) {
@@ -420,7 +420,7 @@ final class ConsiliumPanel implements Disposable {
         }
         running.clear();
         updateControls();
-        status.setText("Остановлено");
+        status.setText(ConsiliumBundle.message("status.stopped"));
     }
 
     private void clear() {

@@ -12,7 +12,7 @@ public final class ConsiliumToolWindowFactory implements ToolWindowFactory, Dumb
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         ConsiliumPanel panel = new ConsiliumPanel(project);
-        Content content = ContentFactory.getInstance().createContent(panel.component(), "Чат", false);
+        Content content = ContentFactory.getInstance().createContent(panel.component(), ConsiliumBundle.message("toolwindow.tab"), false);
         content.setDisposer(panel);
         toolWindow.getContentManager().addContent(content);
     }
