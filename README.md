@@ -6,7 +6,7 @@ Working with two coding agents usually means two terminals and copying answers b
 
 ![Both agents answer the same question in the Consilium tool window](assets/chat.png)
 
-*Both agents answer one question independently, each with its own argument. Screenshot from the Russian interface.*
+*Both agents answer one question independently; on the next turn each sees what the other said.*
 
 **Authorship:** direction, design decisions, and review: Katherine Mironova. Implementation used Claude Code and OpenAI Codex under her direction.
 
