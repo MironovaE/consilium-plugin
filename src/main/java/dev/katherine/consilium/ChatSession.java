@@ -333,8 +333,9 @@ final class ChatSession {
         Object step = beginStep();
         background.execute(() -> {
             parallelWork.commitParts(parts, reports);
-            List<Speaker> idle = parallelWork.withoutCommits(parts);
-            boolean dirty = idle.isEmpty() && parallelWork.projectIsDirty(projectRoot);
+            List<Speaker> idle = parallelWork.withoutCommits(projectRoot, parts);
+            List<PendingWork> hooks = idle.isEmpty() ? parallelWork.touchingHooks(projectRoot, parts) : List.of();
+            boolean dirty = idle.isEmpty() && hooks.isEmpty() && parallelWork.projectIsDirty(projectRoot);
             onUi(() -> {
                 if (!endStep(step)) {
                     view.stateChanged(state());
@@ -343,6 +344,9 @@ final class ChatSession {
                 if (!idle.isEmpty()) {
                     String who = idle.stream().map(Speaker::label).collect(Collectors.joining(", "));
                     notice(ConsiliumBundle.message("notice.parallel.no.commits", who, branches(parts)));
+                } else if (!hooks.isEmpty()) {
+                    // Merging would run hooks the agents changed, outside any sandbox: the person looks first.
+                    notice(ConsiliumBundle.message("notice.merge.hooks", branches(hooks)));
                 } else if (dirty) {
                     notice(ConsiliumBundle.message("notice.merge.dirty", branches(parts)));
                 } else {
@@ -363,7 +367,7 @@ final class ChatSession {
         background.execute(() -> {
             List<PendingWork> present = parallelWork.stillThere(projectRoot, recorded);
             parallelWork.commitParts(present, Map.of());
-            List<Speaker> idle = parallelWork.withoutCommits(present);
+            List<Speaker> idle = parallelWork.withoutCommits(projectRoot, present);
             List<PendingWork> withWork = present.stream().filter(part -> !idle.contains(part.agentValue())).toList();
             boolean dirty = !withWork.isEmpty() && parallelWork.projectIsDirty(projectRoot);
             onUi(() -> {

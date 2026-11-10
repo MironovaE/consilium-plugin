@@ -171,6 +171,7 @@ class ChatSessionTest {
         boolean repository = true;
         boolean dirty;
         final Map<String, List<String>> commits = new HashMap<>();
+        final Map<String, List<String>> changed = new HashMap<>();
         final List<Worktree> created = new ArrayList<>();
         final List<Worktree> removed = new ArrayList<>();
         final List<String> committed = new ArrayList<>();
@@ -201,8 +202,13 @@ class ChatSessionTest {
         }
 
         @Override
-        public List<String> commitsSinceCreated(Worktree worktree) {
+        public List<String> commitsSinceCreated(Path repositoryRoot, Worktree worktree) {
             return commits.getOrDefault(worktree.branch(), List.of());
+        }
+
+        @Override
+        public List<String> changedFiles(Path repositoryRoot, Worktree worktree) {
+            return changed.getOrDefault(worktree.branch(), List.of("src/part.py"));
         }
 
         @Override
@@ -760,5 +766,22 @@ class ChatSessionTest {
         new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
 
         assertTrue(store.pendingWork().isEmpty());
+    }
+
+    @Test
+    void aPartThatChangesHookSettingsWaitsForThePersonBeforeMerging() {
+        git.changed.put("consilium/codex-1", List.of("src/layout.py", ".husky/pre-commit"));
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().answer("cards done", "c1");
+        codex().last().answer("layout done", "x1");
+
+        assertEquals(1, claude().runs.size(), "no automatic merge");
+        assertEquals(ConsiliumBundle.message("notice.merge.hooks", "consilium/codex-1"), notices().getLast());
+
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
+        session.send("looked at it, merge", TurnMode.AUTO, "");
+
+        assertTrue(claude().last().prompt.contains("consilium/codex-1"), "the person's word merges it");
     }
 }

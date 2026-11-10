@@ -28,7 +28,10 @@ public interface GitWorktrees {
     Worktree create(Path repositoryRoot, String agentName) throws IOException;
 
     /** Commits on the worktree's branch since it was created, oldest first ("hash subject"); empty if none. */
-    List<String> commitsSinceCreated(Worktree worktree) throws IOException;
+    List<String> commitsSinceCreated(Path repositoryRoot, Worktree worktree) throws IOException;
+
+    /** Files the branch changed since its worktree was created; works after the worktree folder is gone. */
+    List<String> changedFiles(Path repositoryRoot, Worktree worktree) throws IOException;
 
     /** True when the worktree has changes its agent did not commit. */
     boolean hasUncommittedChanges(Worktree worktree) throws IOException;

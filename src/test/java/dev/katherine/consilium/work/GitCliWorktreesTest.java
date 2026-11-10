@@ -52,7 +52,7 @@ class GitCliWorktreesTest {
         assertEquals(worktree.branch(), git(worktree.path(), "symbolic-ref", "--short", "HEAD"));
         // The main checkout doesn't see the worktree as untracked files.
         assertFalse(worktrees.hasUncommittedChanges(repo));
-        assertEquals(List.of(), worktrees.commitsSinceCreated(worktree));
+        assertEquals(List.of(), worktrees.commitsSinceCreated(repo, worktree));
     }
 
     @Test
@@ -70,7 +70,7 @@ class GitCliWorktreesTest {
         // A commit on main after the worktree was made isn't the agent's.
         git(repo, "commit", "-q", "--allow-empty", "-m", "meanwhile on main");
 
-        List<String> commits = worktrees.commitsSinceCreated(worktree);
+        List<String> commits = worktrees.commitsSinceCreated(repo, worktree);
         assertEquals(2, commits.size());
         assertTrue(commits.get(0).matches("[0-9a-f]{7,} first change"), commits.get(0));
         assertTrue(commits.get(1).endsWith(" second change"), commits.get(1));
@@ -112,9 +112,23 @@ class GitCliWorktreesTest {
         assertTrue(worktrees.commitAll(worktree, "chore(consilium): codex part of a parallel task"));
 
         assertFalse(Files.exists(pwned), "no hook from the agent's copy ran");
-        assertEquals(List.of(), worktrees.commitsSinceCreated(worktree).stream().filter(c -> !c.contains("codex part")).toList());
-        assertEquals(1, worktrees.commitsSinceCreated(worktree).size());
+        assertEquals(List.of(), worktrees.commitsSinceCreated(repo, worktree).stream().filter(c -> !c.contains("codex part")).toList());
+        assertEquals(1, worktrees.commitsSinceCreated(repo, worktree).size());
         assertFalse(worktrees.hasUncommittedChanges(worktree));
+    }
+
+    @Test
+    void aKeptBranchStillReportsItsCommitsAndFilesAfterItsFolderIsGone() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "codex");
+        Files.writeString(worktree.path().resolve("part.txt"), "work");
+        assertTrue(worktrees.commitAll(worktree, "chore(consilium): codex part of a parallel task"));
+        assertFalse(worktrees.remove(repo, worktree), "unmerged, so the branch is kept");
+
+        assertEquals(1, worktrees.commitsSinceCreated(repo, worktree).size());
+        assertEquals(List.of("part.txt"), worktrees.changedFiles(repo, worktree));
+        assertFalse(worktrees.hasUncommittedChanges(worktree));
+        assertFalse(worktrees.commitAll(worktree, "nothing to commit in a folder that's gone"));
     }
 
     @Test

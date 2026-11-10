@@ -104,14 +104,23 @@ public final class GitCliWorktrees implements GitWorktrees {
     }
 
     @Override
-    public List<String> commitsSinceCreated(Worktree worktree) throws IOException {
-        String log = git().output(worktree.path(), inAgentCopy("log", "--reverse", "--format=%h %s",
-                worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--"));
+    public List<String> commitsSinceCreated(Path repositoryRoot, Worktree worktree) throws IOException {
+        // From the repository, not the copy: a kept branch outlives its worktree folder.
+        String log = git().output(repositoryRoot, "log", "--reverse", "--format=%h %s",
+                worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--");
         return log.isEmpty() ? List.of() : log.lines().toList();
     }
 
     @Override
+    public List<String> changedFiles(Path repositoryRoot, Worktree worktree) throws IOException {
+        String names = git().output(repositoryRoot, "diff", "--name-only",
+                worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--");
+        return names.isEmpty() ? List.of() : names.lines().toList();
+    }
+
+    @Override
     public boolean hasUncommittedChanges(Worktree worktree) throws IOException {
+        if (!Files.isDirectory(worktree.path())) return false;
         return !git().output(worktree.path(), inAgentCopy("status", "--porcelain=v1", "--untracked-files=normal")).isEmpty();
     }
 
@@ -185,6 +194,7 @@ public final class GitCliWorktrees implements GitWorktrees {
 
     @Override
     public boolean commitAll(Worktree worktree, String message) throws IOException {
+        if (!Files.isDirectory(worktree.path())) return false;
         git().output(worktree.path(), inAgentCopy("add", "-A"));
         Git.Result staged = git().run(worktree.path(), inAgentCopy("diff", "--cached", "--quiet"));
         if (staged.exitCode() == 0) return false;

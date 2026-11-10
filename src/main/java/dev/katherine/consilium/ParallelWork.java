@@ -122,12 +122,46 @@ final class ParallelWork {
         }
     }
 
-    /** Agents that committed nothing on their branch, in the order given. */
-    List<Speaker> withoutCommits(List<PendingWork> parts) {
+    /**
+     * Files that configure git hooks or hook runners. A part that changes one is not merged
+     * automatically: merging runs the project's hooks outside any sandbox, so the person looks first.
+     */
+    private static final List<String> HOOK_CONFIG = List.of(
+            ".husky/", ".githooks/", ".git-hooks/", ".hooks/", ".pre-commit-config.yaml", ".pre-commit-hooks.yaml",
+            "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", "lefthook-local.yml",
+            ".lefthook-local.yml", ".simple-git-hooks.json", ".simple-git-hooks.js", ".overcommit.yml");
+
+    /** Parts that change hook configuration, in the order given; unknown counts as yes. */
+    List<PendingWork> touchingHooks(Path projectRoot, List<PendingWork> parts) {
+        Path repository = repositoryOrNull(projectRoot);
+        if (repository == null) return parts;
+        List<PendingWork> touching = new ArrayList<>();
+        for (PendingWork part : parts) {
+            try {
+                List<String> files = git.changedFiles(repository, worktree(part));
+                boolean hooks = files.stream().anyMatch(file -> HOOK_CONFIG.stream().anyMatch(
+                        config -> config.endsWith("/") ? file.startsWith(config) || file.contains("/" + config)
+                                : file.equals(config) || file.endsWith("/" + config)));
+                // package.json can declare hooks too (husky v4, simple-git-hooks), so it counts.
+                if (hooks || files.stream().anyMatch(file -> file.equals("package.json") || file.endsWith("/package.json"))) {
+                    touching.add(part);
+                }
+            } catch (IOException exception) {
+                LOG.warn("Couldn't list the files changed on " + part.branch, exception);
+                touching.add(part);
+            }
+        }
+        return touching;
+    }
+
+    /** Agents that committed nothing on their branch, in the order given; unknown counts as nothing. */
+    List<Speaker> withoutCommits(Path projectRoot, List<PendingWork> parts) {
+        Path repository = repositoryOrNull(projectRoot);
+        if (repository == null) return parts.stream().map(PendingWork::agentValue).toList();
         List<Speaker> idle = new ArrayList<>();
         for (PendingWork part : parts) {
             try {
-                if (git.commitsSinceCreated(worktree(part)).isEmpty()) idle.add(part.agentValue());
+                if (git.commitsSinceCreated(repository, worktree(part)).isEmpty()) idle.add(part.agentValue());
             } catch (IOException exception) {
                 LOG.warn("Couldn't list the commits on " + part.branch, exception);
                 idle.add(part.agentValue());
