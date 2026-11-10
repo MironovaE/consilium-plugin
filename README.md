@@ -42,10 +42,33 @@ The interface follows the IDE language: English by default, Russian when the IDE
 
 - IntelliJ IDEA 2026.1 or newer (build 261+)
 - `claude` and `codex` CLIs, installed and authenticated. The plugin looks in `~/.local/bin` first, then in `PATH`.
+- Developed and tested on macOS. Other platforms may work but have not been tried.
 
 ## Install
 
 Download the ZIP from [Releases](../../releases), then in IDEA: **Settings → Plugins → ⚙ → Install Plugin from Disk…**, pick the ZIP, restart, and open the **Consilium** tool window on the right.
+
+## Usage
+
+1. Open the **Consilium** tool window on the right side of the IDE.
+2. Pick a mode in **Mode** at the bottom (see [How it works](#how-it-works)). Start with **Both discuss**: both agents read the repository but can't change it.
+3. Type a message and press **Enter**. **Shift+Enter** starts a new line; **⌘Enter** (Ctrl+Enter) also sends.
+4. Each agent's answer streams into its own card. On the next turn, each agent also gets what the other one said, so you can ask them to respond to each other: *"Each of you, reply to the other's argument in two lines."*
+5. When the plan is settled, switch to **Claude does** or **Codex does** and give the task. Only that agent runs, with write access to the project.
+
+Controls:
+
+- **editor context** — when checked, the message carries the path of the file open in the editor and the selected text, if any. Uncheck it to send the message alone.
+- **Stop** — cancels the current turn. What the agent managed to write stays in the transcript, marked as cut off.
+- **Clear** — empties the transcript and forgets both agents' CLI sessions, so the next message starts from scratch. It can't be undone.
+
+The agents work in the project's root folder, so ask about the repository directly: *"Look at the scanner and tell me how it skips video files."*
+
+## Troubleshooting
+
+- **"Couldn't start … CLI".** The plugin couldn't find the executable. It checks `~/.local/bin` and then the IDE's `PATH`. On macOS an IDE launched from the Dock or Finder doesn't inherit your shell's `PATH`, so a CLI installed through Homebrew or npm may be missing. Link it into `~/.local/bin` (for example `ln -s "$(which codex)" ~/.local/bin/codex`) and send the message again.
+- **"… CLI exited with code …".** Run the same CLI in a terminal: usually it isn't signed in (`claude`, then `/login`; `codex login`) or it was updated and its flags changed. The error text names the class that builds the command.
+- **An agent changed nothing in a "does" turn.** Check the mode: in **Both discuss** and **… answers** both agents are read-only by design.
 
 ## Build from source
 
