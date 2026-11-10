@@ -15,7 +15,14 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        local(providers.gradleProperty("ideaPath").get())
+        // An installed IDE keeps the build offline and fast; without one, the platform is
+        // downloaded, so the project builds on any machine and in CI.
+        val ideaPath = providers.gradleProperty("ideaPath").orNull
+        if (ideaPath != null && file(ideaPath).exists()) {
+            local(ideaPath)
+        } else {
+            intellijIdea(providers.gradleProperty("platformVersion"))
+        }
     }
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
