@@ -134,13 +134,44 @@ public final class GitCliWorktrees implements GitWorktrees {
         String ref = "refs/heads/" + worktree.branch();
         if (!branchExists(repositoryRoot, worktree.branch())) return false;
         Git.Result merged = git().run(repositoryRoot, "merge-base", "--is-ancestor", ref, "HEAD");
-        if (merged.exitCode() == 1) return false;
-        if (!merged.succeeded()) throw Git.failure(merged, "merge-base", "--is-ancestor", ref, "HEAD");
-        git().output(repositoryRoot, "branch", "-d", "--", worktree.branch());
+        if (merged.succeeded()) {
+            git().output(repositoryRoot, "branch", "-d", "--", worktree.branch());
+            return true;
+        }
+        if (merged.exitCode() != 1) throw Git.failure(merged, "merge-base", "--is-ancestor", ref, "HEAD");
+        // The merging agent usually rewrites the part into well-described commits, so the branch is
+        // no ancestor of HEAD although its content is all there. -D only when that is proven.
+        if (!contentIsInHead(repositoryRoot, ref)) return false;
+        git().output(repositoryRoot, "branch", "-D", "--", worktree.branch());
         return true;
     }
 
-    private boolean branchExists(Path repository, String branch) throws IOException {
+    /**
+     * True when merging {@code ref} into HEAD would change nothing: the merge result's tree is
+     * HEAD's own. Needs git 2.38+ for {@code merge-tree --write-tree}; an older git, a conflict or any
+     * failure counts as "not merged", which keeps the branch.
+     */
+    private boolean contentIsInHead(Path repository, String ref) throws IOException {
+        Git.Result merge = git().run(repository, "merge-tree", "--write-tree", "HEAD", ref);
+        if (!merge.succeeded()) return false;
+        String mergedTree = merge.output().lines().findFirst().orElse("").strip();
+        String headTree = git().output(repository, "rev-parse", "HEAD^{tree}").strip();
+        return !mergedTree.isEmpty() && mergedTree.equals(headTree);
+    }
+
+    @Override
+    public boolean commitAll(Worktree worktree, String message) throws IOException {
+        git().output(worktree.path(), "add", "-A");
+        Git.Result staged = git().run(worktree.path(), "diff", "--cached", "--quiet");
+        if (staged.exitCode() == 0) return false;
+        if (staged.exitCode() != 1) throw Git.failure(staged, "diff", "--cached", "--quiet");
+        // -m takes the next argument as the message even if it starts with a dash.
+        git().output(worktree.path(), "commit", "-q", "-m", message);
+        return true;
+    }
+
+    @Override
+    public boolean branchExists(Path repository, String branch) throws IOException {
         Git.Result result = git().run(repository, "show-ref", "--verify", "--quiet", "refs/heads/" + branch);
         if (result.exitCode() == 1 && result.error().isEmpty()) return false;
         if (!result.succeeded()) throw Git.failure(result, "show-ref", "--verify", "--quiet", "refs/heads/" + branch);

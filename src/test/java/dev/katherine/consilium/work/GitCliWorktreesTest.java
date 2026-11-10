@@ -95,6 +95,40 @@ class GitCliWorktreesTest {
     }
 
     @Test
+    void removeDeletesABranchWhoseWorkWasRewrittenIntoHead() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        Files.writeString(worktree.path().resolve("a.txt"), "a");
+        git(worktree.path(), "add", "a.txt");
+        git(worktree.path(), "commit", "-q", "-m", "chore(consilium): claude part of a parallel task");
+        // The merging agent brings the same content in as its own well-described commit.
+        Files.writeString(repo.resolve("a.txt"), "a");
+        git(repo, "add", "a.txt");
+        git(repo, "commit", "-q", "-m", "feat: add a");
+
+        assertTrue(worktrees.remove(repo, worktree));
+
+        assertEquals("", git(repo, "branch", "--list", worktree.branch()));
+    }
+
+    @Test
+    void removeKeepsABranchWithWorkThatIsOnlyPartlyInHead() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "codex");
+        Files.writeString(worktree.path().resolve("a.txt"), "a");
+        Files.writeString(worktree.path().resolve("b.txt"), "b");
+        git(worktree.path(), "add", "-A");
+        git(worktree.path(), "commit", "-q", "-m", "two files");
+        Files.writeString(repo.resolve("a.txt"), "a");
+        git(repo, "add", "a.txt");
+        git(repo, "commit", "-q", "-m", "only one of them");
+
+        assertFalse(worktrees.remove(repo, worktree));
+
+        assertEquals("two files", git(repo, "log", "-1", "--format=%s", worktree.branch()));
+    }
+
+    @Test
     void removeKeepsAnUnmergedBranchAndDiscardsUncommittedFiles() throws IOException {
         Path repo = TestRepositories.init(dir.resolve("repo"), true);
         Worktree worktree = worktrees.create(repo, "codex");

@@ -108,6 +108,8 @@ class ParallelWorkLiveTest {
             assertTrue(added.contains("def add"), "Claude's part reached the project\n" + transcript);
             assertTrue(multiplied.contains("def mul"), "Codex's part reached the project\n" + transcript);
             assertTrue(store.pendingWork().isEmpty(), "the copies are gone\n" + transcript);
+            assertTrue(gitLog(repo).contains("add") && gitLog(repo).contains("mul"), "both parts are in the history\n" + gitLog(repo));
+            System.out.println(gitLog(repo));
             try (Stream<Path> left = Files.list(worktrees)) {
                 assertEquals(0, left.flatMap(ParallelWorkLiveTest::children).count(), "no worktree directory left\n" + transcript);
             }
@@ -152,6 +154,14 @@ class ParallelWorkLiveTest {
         Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         if (process.waitFor() != 0) throw new IOException(String.join(" ", command) + ": " + output);
+    }
+
+    private static String gitLog(Path repo) throws IOException, InterruptedException {
+        Process process = new ProcessBuilder("git", "-C", repo.toString(), "log", "--oneline", "--graph", "--all")
+                .redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        process.waitFor();
+        return output;
     }
 
     private static Stream<Path> children(Path directory) {

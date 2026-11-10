@@ -123,11 +123,27 @@ final class ConsiliumStateStore {
             if (parsed.claude == null) parsed.claude = new AgentSession(null, 0);
             if (parsed.codex == null) parsed.codex = new AgentSession(null, 0);
             if (parsed.pendingWork == null) parsed.pendingWork = new ArrayList<>();
-            parsed.pendingWork.removeIf(work -> work == null || work.path == null || work.branch == null);
+            // workspace.xml can be edited by anyone who commits to the project; these values reach git
+            // arguments and a write turn's prompt, so only the shapes Consilium itself creates pass.
+            parsed.pendingWork.removeIf(work -> !isOwnWork(work));
             return trimmed(parsed, MAX_STORED_MESSAGES);
         } catch (RuntimeException ignored) {
             // A corrupt entry must not lock the tool window; the user loses the transcript, not the IDE.
             return new ConsiliumSnapshot();
+        }
+    }
+
+    private static final java.util.regex.Pattern OWN_BRANCH = java.util.regex.Pattern.compile("consilium/[A-Za-z0-9._-]{1,100}");
+    private static final java.util.regex.Pattern COMMIT = java.util.regex.Pattern.compile("[0-9a-f]{7,64}");
+
+    static boolean isOwnWork(PendingWork work) {
+        if (work == null || work.path == null || work.branch == null || work.baseCommit == null) return false;
+        if (!OWN_BRANCH.matcher(work.branch).matches() || work.branch.contains("..")) return false;
+        if (!COMMIT.matcher(work.baseCommit).matches()) return false;
+        try {
+            return java.nio.file.Path.of(work.path).isAbsolute();
+        } catch (RuntimeException invalidPath) {
+            return false;
         }
     }
 

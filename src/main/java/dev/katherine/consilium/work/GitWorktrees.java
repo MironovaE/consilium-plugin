@@ -34,8 +34,20 @@ public interface GitWorktrees {
     boolean hasUncommittedChanges(Worktree worktree) throws IOException;
 
     /**
-     * Removes the worktree directory and its git metadata. Deletes the branch only if it is merged
-     * into the repository's current HEAD; an unmerged branch is kept so no work is lost.
+     * Stages and commits everything in the worktree on its branch. Consilium commits an agent's part
+     * itself, so the agent never needs write access to the repository's {@code .git}.
+     *
+     * @return false if there was nothing to commit
+     */
+    boolean commitAll(Worktree worktree, String message) throws IOException;
+
+    /** True if the branch still exists; the person may have merged or deleted it by hand. */
+    boolean branchExists(Path repositoryRoot, String branch) throws IOException;
+
+    /**
+     * Removes the worktree directory and its git metadata. Deletes the branch only if its work is in
+     * the repository's current HEAD, as an ancestor or as rewritten commits with the same content; an
+     * unmerged branch is kept so no work is lost.
      *
      * @return true if the branch was deleted
      */

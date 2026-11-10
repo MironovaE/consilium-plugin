@@ -17,6 +17,8 @@ import dev.katherine.consilium.work.Worktree;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -159,14 +161,15 @@ final class ChatSession {
     private final Executor background;
     private final View view;
     private final Map<Speaker, Run> runs = new EnumMap<>(Speaker.class);
-    // Steps that keep the room busy without an agent running: reading the message, preparing or
-    // inspecting worktrees. Each async step checks the generation it started in; Stop and Clear bump
-    // it, so a late result is dropped instead of starting work nobody wants any more.
-    private int pendingSteps;
-    private int generation;
+    // Steps that keep the room busy without an agent running: reading the message, preparing,
+    // committing or removing worktrees. Each step has its own token; Stop and Clear forget them all,
+    // so a late result finds its token gone and is dropped instead of freeing the room for a step
+    // that is still running, or starting work nobody wants any more.
+    private final Set<Object> steps = new HashSet<>();
     // The parts of the parallel task in flight; null when no parallel task is running.
     private List<PendingWork> partsInFlight;
     private final Map<Speaker, MessageStatus> partOutcomes = new EnumMap<>(Speaker.class);
+    private final Map<Speaker, String> partReports = new EnumMap<>(Speaker.class);
     private volatile boolean disposed;
 
     ChatSession(ConsiliumStateStore store, Function<Speaker, CliAgent> agents, IntentClassifier classifier,
@@ -179,6 +182,14 @@ final class ChatSession {
         this.ui = ui;
         this.background = background;
         this.view = view;
+        // After a restart, say once that work is still waiting on its branches.
+        List<PendingWork> waiting = store.pendingWork();
+        if (!waiting.isEmpty()) {
+            String text = ConsiliumBundle.message("notice.pending", branches(waiting));
+            List<ChatMessage> messages = store.messages();
+            boolean alreadySaid = !messages.isEmpty() && text.equals(messages.getLast().textValue());
+            if (!alreadySaid) store.add(Speaker.CONSILIUM, text, MessageStatus.ANSWER);
+        }
     }
 
     List<ChatMessage> messages() {
@@ -186,7 +197,7 @@ final class ChatSession {
     }
 
     State state() {
-        if (pendingSteps > 0) return State.WORKING;
+        if (!steps.isEmpty()) return State.WORKING;
         if (runs.isEmpty()) return State.READY;
         for (Run run : runs.values()) {
             if (!run.settled) return State.WORKING;
@@ -200,11 +211,9 @@ final class ChatSession {
         String message = text.trim();
         view.messageAdded(store.add(Speaker.USER, message, MessageStatus.ANSWER));
         if (mode == TurnMode.AUTO) {
-            int started = generation;
-            beginStep();
+            Object step = beginStep();
             classifier.classify(message, projectRoot).whenComplete((intent, error) -> onUi(() -> {
-                if (started != generation) return;
-                endStep();
+                if (!endStep(step)) return;
                 act(intent != null ? intent : Intent.discussWithBoth(), editorContext);
             }));
         } else {
@@ -221,17 +230,16 @@ final class ChatSession {
                 if (intent.agents().size() == 1) {
                     startTurn(intent.agents(), AgentAccess.WRITE, editorContext);
                 } else {
-                    startParallel();
+                    startParallel(editorContext);
                 }
             }
             case INTEGRATE -> {
                 Speaker integrator = intent.agents().iterator().next();
-                List<PendingWork> parts = store.pendingWork();
-                if (parts.isEmpty()) {
+                if (store.pendingWork().isEmpty()) {
                     // Nothing of ours to merge: the person means some other branches; it's an ordinary task.
                     startTurn(intent.agents(), AgentAccess.WRITE, editorContext);
                 } else {
-                    startMerge(integrator, parts);
+                    mergeWhenReady(integrator);
                 }
             }
             case UNCLEAR -> notice(ConsiliumBundle.message("notice.unclear"));
@@ -248,42 +256,55 @@ final class ChatSession {
 
     // Parallel work
 
-    private void startParallel() {
+    private void startParallel(String editorContext) {
         List<Speaker> both = List.of(Speaker.CLAUDE, Speaker.CODEX);
-        int started = generation;
-        beginStep();
+        List<PendingWork> earlier = store.pendingWork();
+        Object step = beginStep();
         background.execute(() -> {
+            // Parts left from an earlier task must be merged first: a new task would bury them.
+            List<PendingWork> waiting = parallelWork.stillThere(projectRoot, earlier);
             ParallelWork.Prepared prepared = null;
             String refusal = null;
-            try {
-                prepared = parallelWork.prepare(projectRoot, both);
-            } catch (ParallelWork.Refused refused) {
-                refusal = refused.getMessage();
+            if (waiting.isEmpty()) {
+                try {
+                    prepared = parallelWork.prepare(projectRoot, both);
+                } catch (ParallelWork.Refused refused) {
+                    refusal = refused.getMessage();
+                }
             }
             ParallelWork.Prepared ready = prepared;
             String reason = refusal;
+            // Closed or stopped while the copies were being made: they hold nothing yet, so they go.
+            if (ready != null && disposed) {
+                parallelWork.discard(projectRoot, parts(ready));
+                return;
+            }
             onUi(() -> {
-                endStep();
-                if (started != generation) {
-                    // Stopped while the copies were being made: they hold nothing yet, so they go.
+                if (!endStep(step)) {
                     if (ready != null) discardInBackground(parts(ready));
                     view.stateChanged(state());
                     return;
                 }
-                if (ready == null) {
+                if (!waiting.isEmpty()) {
+                    store.setPendingWork(waiting);
+                    notice(ConsiliumBundle.message("notice.pending", branches(waiting)));
+                } else if (ready == null) {
+                    store.setPendingWork(waiting);
                     notice(reason);
                 } else {
-                    runParts(ready);
+                    runParts(ready, editorContext);
                 }
                 view.stateChanged(state());
             });
         });
     }
 
-    private void runParts(ParallelWork.Prepared prepared) {
+    private void runParts(ParallelWork.Prepared prepared, String editorContext) {
         List<PendingWork> parts = parts(prepared);
         store.setPendingWork(parts);
         partsInFlight = parts;
+        partOutcomes.clear();
+        partReports.clear();
         if (prepared.uncommittedChangesLeftOut()) notice(ConsiliumBundle.message("notice.parallel.dirty"));
         Worktree claude = prepared.worktrees().get(Speaker.CLAUDE);
         Worktree codex = prepared.worktrees().get(Speaker.CODEX);
@@ -293,32 +314,59 @@ final class ChatSession {
             Worktree own = prepared.worktrees().get(agent);
             Speaker other = agent == Speaker.CLAUDE ? Speaker.CODEX : Speaker.CLAUDE;
             String header = ConsiliumBundle.message("prompt.part", other.label(), own.branch(), DEFAULT_INTEGRATOR.label());
-            start(agent, AgentAccess.WRITE, Role.PART, snapshot, "", own.path(), header);
+            start(agent, AgentAccess.WRITE, Role.PART, snapshot, editorContext, own.path(), header);
         }
     }
 
-    /** Both parts are over: merge them if both finished with commits, otherwise say what's left. */
-    private void partsFinished(List<PendingWork> parts, Map<Speaker, MessageStatus> outcomes) {
+    /** Both parts are over: commit what each left, then merge if both finished and both have commits. */
+    private void partsFinished(List<PendingWork> parts, Map<Speaker, MessageStatus> outcomes, Map<Speaker, String> reports) {
         boolean allAnswered = outcomes.values().stream().allMatch(status -> status == MessageStatus.ANSWER);
         if (!allAnswered) {
             notice(ConsiliumBundle.message("notice.parallel.incomplete", branches(parts)));
             return;
         }
-        int started = generation;
-        beginStep();
+        Object step = beginStep();
         background.execute(() -> {
+            parallelWork.commitParts(parts, reports);
             List<Speaker> idle = parallelWork.withoutCommits(parts);
+            boolean dirty = idle.isEmpty() && parallelWork.projectIsDirty(projectRoot);
             onUi(() -> {
-                endStep();
-                if (started != generation) {
+                if (!endStep(step)) {
                     view.stateChanged(state());
                     return;
                 }
-                if (idle.isEmpty()) {
-                    startMerge(DEFAULT_INTEGRATOR, parts);
-                } else {
+                if (!idle.isEmpty()) {
                     String who = idle.stream().map(Speaker::label).collect(Collectors.joining(", "));
                     notice(ConsiliumBundle.message("notice.parallel.no.commits", who, branches(parts)));
+                } else if (dirty) {
+                    notice(ConsiliumBundle.message("notice.merge.dirty", branches(parts)));
+                } else {
+                    startMerge(DEFAULT_INTEGRATOR, parts);
+                }
+                view.stateChanged(state());
+            });
+        });
+    }
+
+    /** "Merge": check the branches are still there and the project is clean, then merge. */
+    private void mergeWhenReady(Speaker integrator) {
+        List<PendingWork> recorded = store.pendingWork();
+        Object step = beginStep();
+        background.execute(() -> {
+            List<PendingWork> parts = parallelWork.stillThere(projectRoot, recorded);
+            boolean dirty = !parts.isEmpty() && parallelWork.projectIsDirty(projectRoot);
+            onUi(() -> {
+                if (!endStep(step)) {
+                    view.stateChanged(state());
+                    return;
+                }
+                store.setPendingWork(parts);
+                if (parts.isEmpty()) {
+                    notice(ConsiliumBundle.message("notice.merge.nothing"));
+                } else if (dirty) {
+                    notice(ConsiliumBundle.message("notice.merge.dirty", branches(parts)));
+                } else {
+                    startMerge(integrator, parts);
                 }
                 view.stateChanged(state());
             });
@@ -337,14 +385,13 @@ final class ChatSession {
             notice(ConsiliumBundle.message("notice.merge.failed", branches(parts)));
             return;
         }
-        int started = generation;
-        beginStep();
+        Object step = beginStep();
         background.execute(() -> {
             List<PendingWork> kept = parallelWork.cleanUp(projectRoot, parts);
             onUi(() -> {
-                endStep();
-                if (started == generation) {
-                    store.setPendingWork(kept);
+                // What is on disk is recorded even after Stop: the copies are gone either way.
+                store.setPendingWork(kept);
+                if (endStep(step)) {
                     notice(kept.isEmpty()
                             ? ConsiliumBundle.message("notice.merge.cleaned")
                             : ConsiliumBundle.message("notice.merge.kept", branches(kept)));
@@ -410,10 +457,11 @@ final class ChatSession {
 
     /** Stops every agent; what they managed to write is kept, marked as cut off. */
     void stop() {
-        generation++;
-        if (pendingSteps > 0) {
+        if (!steps.isEmpty()) {
+            // Forget the steps first: a cancelled classification completes at once, and its result
+            // must find its step gone rather than start a discussion the person just stopped.
+            steps.clear();
             classifier.cancel();
-            pendingSteps = 0;
         }
         for (Run run : new ArrayList<>(runs.values())) {
             // cancel() returns only after any callback in flight has finished, so after it
@@ -446,7 +494,7 @@ final class ChatSession {
             runs.remove(run.speaker);
             afterRun(run);
             // Indices of turns in flight are no longer in use, so the transcript can be trimmed.
-            if (runs.isEmpty() && pendingSteps == 0) store.compact();
+            if (runs.isEmpty() && steps.isEmpty()) store.compact();
         }
         view.stateChanged(state());
     }
@@ -457,26 +505,34 @@ final class ChatSession {
             }
             case PART -> {
                 partOutcomes.put(run.speaker, run.outcome);
+                partReports.put(run.speaker, run.text());
                 if (partsInFlight != null && partOutcomes.size() == partsInFlight.size()) {
                     List<PendingWork> parts = partsInFlight;
                     Map<Speaker, MessageStatus> outcomes = new EnumMap<>(partOutcomes);
+                    Map<Speaker, String> reports = new EnumMap<>(partReports);
                     partsInFlight = null;
                     partOutcomes.clear();
-                    partsFinished(parts, outcomes);
+                    partReports.clear();
+                    partsFinished(parts, outcomes, reports);
                 }
             }
             case MERGE -> merged(run);
         }
     }
 
-    /** Empties the transcript and forgets both agents' sessions; refused while a turn is running. */
+    /**
+     * Empties the transcript and forgets both agents' sessions; refused while a turn is running.
+     * Unmerged parallel work survives it: the branches stay recorded and the new transcript says so.
+     */
     boolean clear() {
         if (state() != State.READY) return false;
-        generation++;
         List<PendingWork> parts = store.pendingWork();
         store.clear();
-        if (!parts.isEmpty()) discardInBackground(parts);
         view.transcriptCleared();
+        if (!parts.isEmpty()) {
+            store.setPendingWork(parts);
+            notice(ConsiliumBundle.message("notice.pending", branches(parts)));
+        }
         return true;
     }
 
@@ -499,12 +555,15 @@ final class ChatSession {
         view.messageAdded(store.add(Speaker.CONSILIUM, text, MessageStatus.ANSWER));
     }
 
-    private void beginStep() {
-        pendingSteps++;
+    private Object beginStep() {
+        Object step = new Object();
+        steps.add(step);
+        return step;
     }
 
-    private void endStep() {
-        if (pendingSteps > 0) pendingSteps--;
+    /** False when the step was forgotten by Stop or Clear: its result must be dropped. */
+    private boolean endStep(Object step) {
+        return steps.remove(step);
     }
 
     private void discardInBackground(List<PendingWork> parts) {

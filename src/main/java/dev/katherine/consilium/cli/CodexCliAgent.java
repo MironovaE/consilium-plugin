@@ -4,7 +4,6 @@ import dev.katherine.consilium.ConsiliumBundle;
 
 import com.google.gson.JsonObject;
 import dev.katherine.consilium.model.Speaker;
-import dev.katherine.consilium.work.LinkedWorktreeDirectories;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -37,26 +36,25 @@ public final class CodexCliAgent extends AbstractCliAgent {
     @Override
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
                                  Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
-        if (access == AgentAccess.WRITE) {
-            return arguments(projectRoot, sessionId, access, List.of(), LinkedWorktreeDirectories.outside(projectRoot));
-        }
+        if (access == AgentAccess.WRITE) return arguments(projectRoot, sessionId, access);
         List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout, cancelled);
-        return arguments(projectRoot, sessionId, access, servers, List.of());
+        return arguments(projectRoot, sessionId, access, servers);
     }
 
     @Override
     List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access) {
-        return arguments(projectRoot, sessionId, access, List.of(), List.of());
+        return arguments(projectRoot, sessionId, access, List.of());
     }
 
     /**
-     * {@code mcpServersToDisable} only applies to read-only turns, {@code writableDirectories} only to
-     * write turns. The latter are a linked worktree's git directories: workspace-write allows writes
-     * under {@code --cd} only, and without them {@code git add} in a worktree fails on
-     * {@code index.lock} (reproduced on codex-cli 0.167.0).
+     * {@code mcpServersToDisable} only applies to read-only turns.
+     *
+     * <p>A write turn in a linked worktree gets no access to the repository's {@code .git}: that
+     * would let the sandboxed agent write hooks or {@code core.fsmonitor} into {@code .git/config}
+     * and run code outside the sandbox at the next git command. So Codex can't commit there, and
+     * Consilium commits a parallel part itself (see ParallelWork).
      */
-    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                           List<String> mcpServersToDisable, List<Path> writableDirectories) {
+    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access, List<String> mcpServersToDisable) {
         List<String> command = new ArrayList<>();
         command.add("exec");
         String resumable = access == AgentAccess.READ_ONLY ? SessionIds.resumable(sessionId) : null;
@@ -80,12 +78,6 @@ public final class CodexCliAgent extends AbstractCliAgent {
             if (access == AgentAccess.READ_ONLY) {
                 addNoEscalation(command);
                 command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
-            }
-            if (access == AgentAccess.WRITE) {
-                for (Path directory : writableDirectories) {
-                    command.add("--add-dir");
-                    command.add(directory.toString());
-                }
             }
             command.add("--cd");
             command.add(projectRoot.toString());

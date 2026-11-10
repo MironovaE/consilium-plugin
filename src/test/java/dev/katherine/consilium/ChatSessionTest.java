@@ -172,6 +172,8 @@ class ChatSessionTest {
         final Map<String, List<String>> commits = new HashMap<>();
         final List<Worktree> created = new ArrayList<>();
         final List<Worktree> removed = new ArrayList<>();
+        final List<String> committed = new ArrayList<>();
+        final Set<String> branches = new java.util.HashSet<>();
 
         @Override
         public Path repositoryRoot(Path projectRoot) {
@@ -192,6 +194,7 @@ class ChatSessionTest {
         public Worktree create(Path repositoryRoot, String agentName) {
             Worktree worktree = new Worktree(Path.of("/wt/" + agentName), "consilium/" + agentName + "-1", "base");
             created.add(worktree);
+            branches.add(worktree.branch());
             commits.putIfAbsent(worktree.branch(), List.of("abc1234 " + agentName + "'s part"));
             return worktree;
         }
@@ -207,8 +210,20 @@ class ChatSessionTest {
         }
 
         @Override
+        public boolean commitAll(Worktree worktree, String message) {
+            committed.add(worktree.branch() + ": " + message);
+            return true;
+        }
+
+        @Override
+        public boolean branchExists(Path repositoryRoot, String branch) {
+            return branches.contains(branch);
+        }
+
+        @Override
         public boolean remove(Path repositoryRoot, Worktree worktree) {
             removed.add(worktree);
+            branches.remove(worktree.branch());
             return true;
         }
     }
@@ -601,19 +616,112 @@ class ChatSessionTest {
         assertEquals(0, claude().runs.size() + codex().runs.size());
     }
 
-    @Test
-    void clearRemovesTheAgentsCopies() {
+    private void failBothParts() {
         classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
         session.send("go ahead", TurnMode.AUTO, "");
         claude().last().listener.onError("boom");
         claude().last().exited.complete(null);
         codex().last().listener.onError("boom");
         codex().last().exited.complete(null);
+    }
+
+    @Test
+    void clearKeepsUnmergedWorkAndSaysWhereItIs() {
+        failBothParts();
 
         assertTrue(session.clear());
 
-        assertEquals(2, git.removed.size());
-        assertTrue(store.pendingWork().isEmpty());
+        assertTrue(git.removed.isEmpty(), "nothing an agent did is thrown away");
+        assertEquals(2, store.pendingWork().size());
+        assertEquals(List.of(ConsiliumBundle.message("notice.pending", "consilium/claude-1, consilium/codex-1")), notices());
+    }
+
+    @Test
+    void aNewParallelTaskWaitsUntilEarlierPartsAreMerged() {
+        failBothParts();
+        int created = git.created.size();
+
+        session.send("go ahead again", TurnMode.AUTO, "");
+
+        assertEquals(created, git.created.size(), "no new copies over unmerged ones");
+        assertEquals(ConsiliumBundle.message("notice.pending", "consilium/claude-1, consilium/codex-1"), notices().getLast());
+    }
+
+    @Test
+    void theMergeWaitsWhileTheProjectHasUncommittedChanges() {
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        git.dirty = true;
+        claude().last().answer("cards done", "c1");
+        codex().last().answer("layout done", "x1");
+
+        assertEquals(1, claude().runs.size(), "no merge over the person's own edits");
+        assertTrue(notices().getLast().startsWith(ConsiliumBundle.message("notice.merge.dirty", "").substring(0, 20)), notices().toString());
+    }
+
+    @Test
+    void consiliumCommitsEachPartAndTheAgentsAreToldNotTo() {
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        FakeRun part = claude().last();
+        assertTrue(part.prompt.contains("Don't commit"), part.prompt);
+
+        part.answer("cards done", "c1");
+        codex().last().answer("layout done", "x1");
+
+        assertEquals(2, git.committed.size());
+        assertTrue(git.committed.getFirst().startsWith("consilium/claude-1: chore(consilium): claude part"), git.committed.toString());
+        assertTrue(git.committed.getFirst().contains("cards done"), "the agent's report becomes the commit body");
+    }
+
+    @Test
+    void aLateStepAfterStopDoesNotFreeTheRoom() {
+        Queue<Runnable> work = new ArrayDeque<>();
+        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+                Runnable::run, work::add, view);
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        queued.send("go ahead", TurnMode.AUTO, "");
+        queued.stop();
+        classifier.hold = true;
+        queued.send("what now?", TurnMode.AUTO, "");
+        assertEquals(ChatSession.State.WORKING, queued.state());
+
+        while (!work.isEmpty()) work.poll().run();
+
+        assertEquals(ChatSession.State.WORKING, queued.state(), "the classifier is still reading the new message");
+        assertEquals(2, git.removed.size(), "the copies made for the stopped task are removed");
+        assertEquals(0, claude().runs.size() + codex().runs.size());
+    }
+
+    @Test
+    void stopDuringCleanupStillRecordsWhatIsOnDisk() {
+        Queue<Runnable> work = new ArrayDeque<>();
+        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+                Runnable::run, work::add, view);
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        queued.send("go ahead", TurnMode.AUTO, "");
+        work.poll().run();
+        claude().last().answer("cards done", "c1");
+        codex().last().answer("layout done", "x1");
+        work.poll().run();
+        claude().last().answer("merged", "c2");
+
+        queued.stop();
+        while (!work.isEmpty()) work.poll().run();
+
+        assertTrue(store.pendingWork().isEmpty(), "the copies are gone, so the record is too");
+    }
+
+    @Test
+    void afterARestartTheRoomSaysOnceThatWorkIsWaiting() {
+        failBothParts();
+        int before = notices().size();
+
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+
+        assertEquals(before + 1, notices().size());
+        assertEquals(ConsiliumBundle.message("notice.pending", "consilium/claude-1, consilium/codex-1"), notices().getLast());
     }
 
     @Test

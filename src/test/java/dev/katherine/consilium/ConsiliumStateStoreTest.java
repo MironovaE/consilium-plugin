@@ -107,4 +107,21 @@ class ConsiliumStateStoreTest {
         persistence.value = "{not json";
         assertTrue(new ConsiliumStateStore(persistence).messages().isEmpty());
     }
+
+    @Test
+    void onlyPendingWorkShapedLikeConsiliumsOwnSurvivesLoading() {
+        MemoryPersistence persistence = new MemoryPersistence();
+        ConsiliumStateStore store = new ConsiliumStateStore(persistence);
+        store.setPendingWork(java.util.List.of(
+                new dev.katherine.consilium.model.PendingWork(Speaker.CLAUDE, "/wt/claude", "consilium/claude-1", "0123abcd"),
+                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "main", "0123abcd"),
+                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "consilium/codex-1", "--output=/tmp/x"),
+                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "relative/path", "consilium/codex-1", "0123abcd"),
+                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "consilium/../main", "0123abcd")));
+
+        ConsiliumStateStore reopened = new ConsiliumStateStore(persistence);
+
+        assertEquals(1, reopened.pendingWork().size());
+        assertEquals("consilium/claude-1", reopened.pendingWork().getFirst().branch);
+    }
 }

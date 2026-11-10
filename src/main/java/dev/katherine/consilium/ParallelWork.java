@@ -33,6 +33,7 @@ final class ParallelWork {
         }
     }
 
+    private static final int MAX_REPORT_IN_MESSAGE = 2000;
     private final GitWorktrees git;
 
     ParallelWork(GitWorktrees git) {
@@ -58,6 +59,54 @@ final class ParallelWork {
             // Half a setup is worse than none: an agent without its copy would have nowhere to work.
             for (Worktree worktree : created.values()) removeQuietly(repository, worktree);
             throw new Refused(ConsiliumBundle.message("notice.parallel.failed", exception.getMessage()));
+        }
+    }
+
+    /**
+     * Commits what each agent left in its worktree. The agents don't commit themselves: Codex can't
+     * without write access to the repository's .git, which would let it escape its sandbox, and the
+     * merging agent rewrites these commits by the repository's conventions anyway.
+     */
+    void commitParts(List<PendingWork> parts, Map<Speaker, String> reports) {
+        for (PendingWork part : parts) {
+            Speaker agent = part.agentValue();
+            String report = reports.getOrDefault(agent, "").strip();
+            if (report.length() > MAX_REPORT_IN_MESSAGE) report = report.substring(0, MAX_REPORT_IN_MESSAGE) + "…";
+            String message = "chore(consilium): " + agent.name().toLowerCase(Locale.ROOT) + " part of a parallel task"
+                    + (report.isEmpty() ? "" : "\n\n" + report);
+            try {
+                git.commitAll(worktree(part), message);
+            } catch (IOException exception) {
+                LOG.warn("Couldn't commit the part on " + part.branch, exception);
+            }
+        }
+    }
+
+    /** The parts whose branches still exist; the person may have merged or deleted some by hand. */
+    List<PendingWork> stillThere(Path projectRoot, List<PendingWork> parts) {
+        Path repository = repositoryOrNull(projectRoot);
+        if (repository == null) return List.of();
+        List<PendingWork> present = new ArrayList<>();
+        for (PendingWork part : parts) {
+            try {
+                if (git.branchExists(repository, part.branch)) present.add(part);
+            } catch (IOException exception) {
+                LOG.warn("Couldn't check the branch " + part.branch, exception);
+                present.add(part);
+            }
+        }
+        return present;
+    }
+
+    /** True when the project has uncommitted changes, which a merge must not touch. */
+    boolean projectIsDirty(Path projectRoot) {
+        Path repository = repositoryOrNull(projectRoot);
+        if (repository == null) return false;
+        try {
+            return git.hasUncommittedChanges(repository);
+        } catch (IOException exception) {
+            LOG.warn("Couldn't check the project for uncommitted changes", exception);
+            return true;
         }
     }
 
@@ -101,7 +150,7 @@ final class ParallelWork {
         return kept;
     }
 
-    /** Clear: the person asked to forget everything, so worktrees go even with uncommitted changes. */
+    /** Removes worktrees that never held any work: created for a turn that was stopped or closed before it began. */
     void discard(Path projectRoot, List<PendingWork> parts) {
         Path repository = repositoryOrNull(projectRoot);
         if (repository == null) return;
