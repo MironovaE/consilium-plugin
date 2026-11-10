@@ -3,8 +3,8 @@ package dev.katherine.consilium;
 import com.intellij.ide.plugins.IdeaPluginDescriptor;
 import com.intellij.ide.plugins.PluginManagerCore;
 import com.intellij.openapi.Disposable;
-import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.ComboBox;
@@ -14,94 +14,88 @@ import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextArea;
 import com.intellij.util.ui.JBUI;
-import dev.katherine.consilium.cli.AgentListener;
-import dev.katherine.consilium.cli.AgentAccess;
+import com.intellij.util.ui.NamedColorUtil;
 import dev.katherine.consilium.cli.ClaudeCliAgent;
 import dev.katherine.consilium.cli.CliAgent;
 import dev.katherine.consilium.cli.CodexCliAgent;
-import dev.katherine.consilium.cli.RunningRequest;
-import dev.katherine.consilium.model.AgentSession;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.Speaker;
-import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
-final class ConsiliumPanel implements Disposable {
+/** The tool window: layout and message cards. Turn logic lives in {@link ChatSession}. */
+final class ConsiliumPanel implements Disposable, ChatSession.View {
+    // Opening a project with a long transcript builds every card, and each parses Markdown.
+    // Cards are added a batch per event so the IDE stays responsive while they load.
+    private static final int HISTORY_BATCH = 25;
+
     private record MessageCard(JBLabel name, MessageBody body) {
     }
 
-    private enum Target {
-        BOTH("target.both"),
-        CLAUDE("target.claude"),
-        CODEX("target.codex"),
-        CLAUDE_WRITES("target.claude.writes"),
-        CODEX_WRITES("target.codex.writes");
-
-        private final String key;
-
-        Target(String key) {
-            this.key = key;
-        }
-
-        @Override
-        public String toString() {
-            return ConsiliumBundle.message(key);
-        }
-    }
-
     private final Project project;
-    private final ConsiliumStateStore store;
+    private final ChatSession session;
     private final JPanel root = new JPanel(new BorderLayout());
-    private final JPanel transcript = new WidthTrackingPanel();
     private final JPanel messageList = new JPanel();
+    // Stored cards go here, above the live ones, so a message sent while the history is still
+    // loading lands below it, in order.
+    private final JPanel history = new JPanel();
     private final JBScrollPane transcriptScroll;
     private final JBTextArea input = new JBTextArea(4, 20);
-    private final ComboBox<Target> target = new ComboBox<>(Target.values());
+    private final ComboBox<TurnMode> mode = new ComboBox<>(TurnMode.values());
     private final JBCheckBox includeEditorContext = new JBCheckBox(ConsiliumBundle.message("checkbox.editor.context"), true);
     private final JButton send = new JButton(ConsiliumBundle.message("button.send"));
     private final JButton stop = new JButton(ConsiliumBundle.message("button.stop"));
     private final JButton clear = new JButton(ConsiliumBundle.message("button.clear"));
-    private final JBLabel status = new JBLabel(ConsiliumBundle.message("status.ready"));
-    // Держим и запрос, и карточку: Стоп должен честно пометить карточку
-    // «остановлен», а не оставить её «думает…» навсегда.
-    // settled — кто первым закрыл ход: ответ дошёл до конца или нажали «Стоп». Ответ, пришедший
-    // в момент нажатия, иначе сохранился бы дважды — целиком и обрезком с пометкой.
-    private record ActiveRun(RunningRequest request, MessageCard card, AtomicBoolean settled) {
-    }
-
-    static final String STOPPED_MARK = ConsiliumBundle.message("answer.stopped.mark");
-
-    private final Map<Speaker, ActiveRun> running = new EnumMap<>(Speaker.class);
+    private final JBLabel status = new JBLabel();
+    private final boolean hasProjectRoot;
+    // Bumped by Clear, so batches of a history that was cleared stop adding cards.
+    private int historyGeneration;
     private volatile boolean disposed;
 
     ConsiliumPanel(Project project) {
         this.project = project;
-        this.store = new ConsiliumStateStore(project);
+        String basePath = project.getBasePath();
+        hasProjectRoot = basePath != null;
+        // Without a base path (the default project) agents would run in the IDE's own working
+        // directory, which may be "/". Such a panel stays read-only and says why.
+        Path rootPath = hasProjectRoot ? Path.of(basePath) : Path.of(System.getProperty("user.home"));
+        session = new ChatSession(new ConsiliumStateStore(project), ConsiliumPanel::agentFor, rootPath, this::onUi, this);
+
         messageList.setLayout(new BoxLayout(messageList, BoxLayout.Y_AXIS));
+        history.setLayout(new BoxLayout(history, BoxLayout.Y_AXIS));
+        history.setAlignmentX(Component.LEFT_ALIGNMENT);
+        history.setOpaque(false);
+        JPanel transcript = new WidthTrackingPanel();
         transcript.add(messageList, BorderLayout.NORTH);
         transcript.setBorder(JBUI.Borders.empty(10));
         transcriptScroll = new JBScrollPane(transcript);
         transcriptScroll.setBorder(JBUI.Borders.empty());
         buildUi();
-        renderStoredMessages();
+        showHistory(session.messages());
+        stateChanged(session.state());
     }
 
     JComponent component() {
         return root;
     }
 
+    private static CliAgent agentFor(Speaker speaker) {
+        return switch (speaker) {
+            case CLAUDE -> new ClaudeCliAgent();
+            case CODEX -> new CodexCliAgent();
+            case USER -> throw new IllegalArgumentException("The user is not an agent");
+        };
+    }
+
     private void buildUi() {
-        // Один ряд по базовой линии: заголовок, версия, статус и текст кнопки стоят на одной
-        // строке, а не центрируются каждый по своей высоте. FlowLayout тут не годится — он
-        // добавляет зазор и слева, и шапка уезжает от края карточек.
+        // One row on a shared baseline: title, version, status and the button text sit on one line
+        // instead of each centering on its own height. FlowLayout would add a leading gap and push
+        // the header away from the cards' edge.
         JPanel header = new JPanel(new GridBagLayout());
         header.setBorder(JBUI.Borders.empty(8, 10));
         JBLabel title = new JBLabel("Consilium");
@@ -123,12 +117,11 @@ final class ConsiliumPanel implements Disposable {
 
         JPanel actions = new JPanel(new GridBagLayout());
         addOnBaseline(actions, new JBLabel(ConsiliumBundle.message("label.mode")), 6, false);
-        addOnBaseline(actions, target, 10, false);
+        addOnBaseline(actions, mode, 10, false);
         addOnBaseline(actions, includeEditorContext, 10, false);
         addOnBaseline(actions, send, 6, false);
         addOnBaseline(actions, stop, 0, false);
         addOnBaseline(actions, Box.createHorizontalGlue(), 0, true);
-        stop.setEnabled(false);
 
         JPanel composer = new JPanel(new BorderLayout(0, JBUI.scale(7)));
         composer.setBorder(JBUI.Borders.empty(8, 10, 10, 10));
@@ -140,8 +133,8 @@ final class ConsiliumPanel implements Disposable {
         root.add(composer, BorderLayout.SOUTH);
 
         send.addActionListener(event -> send());
-        stop.addActionListener(event -> cancelAll());
-        clear.addActionListener(event -> clear());
+        stop.addActionListener(event -> session.stop());
+        clear.addActionListener(event -> session.clear());
 
         // Enter sends and Shift+Enter breaks the line, as in most chat apps; Cmd+Enter keeps
         // working for those who learned it. Pasted multi-line text is unaffected.
@@ -154,7 +147,7 @@ final class ConsiliumPanel implements Disposable {
                 javax.swing.text.DefaultEditorKit.insertBreakAction);
         input.getActionMap().put("consilium-send", new AbstractAction() {
             @Override
-            public void actionPerformed(java.awt.event.ActionEvent event) {
+            public void actionPerformed(ActionEvent event) {
                 send();
             }
         });
@@ -171,198 +164,224 @@ final class ConsiliumPanel implements Disposable {
         row.add(component, c);
     }
 
-    // Версию берём из установленного плагина, чтобы в окне было видно, какая сборка стоит.
+    // The version comes from the installed plugin, so the window shows which build is running.
     private static String pluginVersion() {
         IdeaPluginDescriptor plugin = PluginManagerCore.getPlugin(PluginId.getId("dev.katherine.consilium"));
         return plugin == null ? "" : "v" + plugin.getVersion();
     }
 
-    private void renderStoredMessages() {
-        for (ChatMessage message : store.messages()) {
-            addMessageCard(message.speakerValue(), message.text, false);
-        }
-        if (store.messages().isEmpty()) {
-            addWelcome();
-        }
-    }
-
-    private void addWelcome() {
-        JPanel card = new JPanel(new BorderLayout());
-        card.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.setBorder(JBUI.Borders.empty(18, 12));
-        card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
-        JBTextArea text = messageArea(ConsiliumBundle.message("welcome"));
-        text.setForeground(JBColor.GRAY);
-        card.add(text, BorderLayout.CENTER);
-        messageList.add(card);
-    }
-
     private void send() {
-        if (!running.isEmpty()) return;
-        String text = input.getText().trim();
-        if (text.isEmpty()) return;
-
-        if (store.messages().isEmpty()) messageList.removeAll();
-        store.add(Speaker.USER, text);
-        addMessageCard(Speaker.USER, text, false);
-        input.setText("");
-
-        List<ChatMessage> snapshot = store.messages();
-        int snapshotSize = snapshot.size();
-        String editorContext = includeEditorContext.isSelected() ? editorContext() : "";
-        Target selected = (Target) target.getSelectedItem();
-        if (selected == null) selected = Target.BOTH;
-
-        switch (selected) {
-            case BOTH -> {
-                startAgent(new ClaudeCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.READ_ONLY);
-                startAgent(new CodexCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.READ_ONLY);
-            }
-            case CLAUDE -> startAgent(new ClaudeCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.READ_ONLY);
-            case CODEX -> startAgent(new CodexCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.READ_ONLY);
-            case CLAUDE_WRITES -> startAgent(new ClaudeCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.WRITE);
-            case CODEX_WRITES -> startAgent(new CodexCliAgent(), snapshot, snapshotSize, editorContext, AgentAccess.WRITE);
+        if (!hasProjectRoot) return;
+        TurnMode selected = (TurnMode) mode.getSelectedItem();
+        String context = includeEditorContext.isSelected() ? editorContext() : "";
+        if (session.send(input.getText(), selected == null ? TurnMode.BOTH : selected, context)) {
+            input.setText("");
         }
-        updateControls();
     }
 
-    private void startAgent(CliAgent agent, List<ChatMessage> snapshot, int snapshotSize, String editorContext, AgentAccess access) {
-        Speaker speaker = agent.speaker();
-        AgentSession session = store.session(speaker);
-        boolean fresh = access == AgentAccess.WRITE || session.sessionId == null || session.sessionId.isBlank();
-        String prompt = ConversationPromptBuilder.build(snapshot, speaker, session.seenThrough, fresh, editorContext, access);
-        MessageCard response = addMessageCard(speaker, "", true);
-        StringBuilder text = new StringBuilder();
-        AtomicReference<String> sessionId = new AtomicReference<>(session.sessionId);
-        AtomicBoolean settled = new AtomicBoolean();
-        // Дельты приходят каждые несколько токенов, а разбор Markdown и пересборка HTML — дорогие.
-        // На EDT уходит одна перерисовка за раз с самым свежим текстом, а не очередь из сотен.
-        AtomicReference<String> latest = new AtomicReference<>();
+    // ChatSession.View
 
-        AgentListener listener = new AgentListener() {
+    @Override
+    public void messageAdded(ChatMessage message) {
+        if (isWelcomeShown()) resetTranscript();
+        addCard(messageList, message);
+        refreshTranscript();
+    }
+
+    @Override
+    public ChatSession.AnswerView answerStarted(Speaker speaker) {
+        MessageCard card = newCard(messageList, speaker, ConsiliumBundle.message("card.thinking", speaker.label()));
+        refreshTranscript();
+        return new ChatSession.AnswerView() {
             @Override
-            public void onSessionId(String value) {
-                if (value != null && !value.isBlank()) sessionId.set(value);
+            public void preview(String markdown) {
+                card.body().setMarkdown(markdown);
+                scrollToBottom();
             }
 
             @Override
-            public void onTextDelta(String delta) {
-                text.append(delta);
-                // Снимок строки берём ЗДЕСЬ (фоновый тред агента): StringBuilder не
-                // потокобезопасен, toString() на EDT гонялся бы с append() здесь.
-                if (latest.getAndSet(text.toString()) != null) return;
-                onUi(() -> {
-                    String rendered = latest.getAndSet(null);
-                    if (rendered == null || settled.get()) return;
-                    response.body().setMarkdown(rendered);
-                    scrollToBottom();
-                });
+            public void completed(String markdown) {
+                card.name().setText(speaker.label());
+                card.body().setMarkdown(markdown);
+                scrollToBottom();
             }
 
             @Override
-            public void onCompleted() {
-                if (!settled.compareAndSet(false, true)) return;
-                String answer = text.toString().trim();
-                if (answer.isEmpty()) answer = ConsiliumBundle.message("answer.empty");
-                String finalAnswer = answer;
-                store.add(speaker, finalAnswer);
-                if (access == AgentAccess.READ_ONLY) {
-                    store.updateSession(speaker, sessionId.get(), snapshotSize);
-                }
-                onUi(() -> {
-                    response.body().setMarkdown(finalAnswer);
-                    response.name().setText(speaker.label());
-                    finish(speaker);
-                });
+            public void failed(String detail) {
+                showFailed(card, speaker, detail);
+                scrollToBottom();
             }
 
             @Override
-            public void onError(String message) {
-                if (!settled.compareAndSet(false, true)) return;
-                String error = ConsiliumBundle.message("error.answer", message);
-                store.add(speaker, error);
-                onUi(() -> {
-                    response.body().showError(error, JBColor.RED);
-                    response.name().setText(ConsiliumBundle.message("card.error", speaker.label()));
-                    finish(speaker);
-                });
+            public void stopped(String partial) {
+                showStopped(card, speaker, partial);
             }
         };
-
-        Path rootPath = Path.of(Objects.requireNonNullElse(project.getBasePath(), System.getProperty("user.dir")));
-        // Ход «делает» всегда стартует новой сессией с полным транскриптом: чистый
-        // контекст задачи, а права задают явные флаги, а не унаследованная сессия
-        // обсуждения (у codex resume песочницу флагом не задать).
-        String resumableSession = access == AgentAccess.READ_ONLY ? session.sessionId : null;
-        RunningRequest request = agent.start(rootPath, prompt, resumableSession, access, listener);
-        running.put(speaker, new ActiveRun(request, response, settled));
     }
 
-    private MessageCard addMessageCard(Speaker speaker, String initialText, boolean pending) {
+    @Override
+    public void stateChanged(ChatSession.State state) {
+        boolean ready = hasProjectRoot && state == ChatSession.State.READY;
+        send.setEnabled(ready);
+        clear.setEnabled(ready);
+        mode.setEnabled(ready);
+        stop.setEnabled(state != ChatSession.State.READY);
+        status.setText(ConsiliumBundle.message(switch (state) {
+            case READY -> hasProjectRoot ? "status.ready" : "status.no.project";
+            case WORKING -> "status.working";
+            case FINISHING -> "status.finishing";
+        }));
+    }
+
+    @Override
+    public void transcriptCleared() {
+        historyGeneration++;
+        resetTranscript();
+        addWelcome();
+        refreshTranscript();
+    }
+
+    // Cards
+
+    private void showHistory(List<ChatMessage> messages) {
+        resetTranscript();
+        if (messages.isEmpty()) {
+            addWelcome();
+            return;
+        }
+        int generation = historyGeneration;
+        addHistoryBatch(messages, 0, generation);
+    }
+
+    private void addHistoryBatch(List<ChatMessage> messages, int from, int generation) {
+        if (disposed || generation != historyGeneration) return;
+        int to = Math.min(messages.size(), from + HISTORY_BATCH);
+        for (int index = from; index < to; index++) {
+            addCard(history, messages.get(index));
+        }
+        refreshTranscript();
+        if (to < messages.size()) {
+            SwingUtilities.invokeLater(() -> addHistoryBatch(messages, to, generation));
+        }
+    }
+
+    private void addCard(JPanel list, ChatMessage message) {
+        Speaker speaker = message.speakerValue();
+        MessageCard card = newCard(list, speaker, speaker.label());
+        switch (message.statusValue()) {
+            case ANSWER -> card.body().setMarkdown(message.textValue());
+            case STOPPED -> showStopped(card, speaker, message.textValue());
+            case ERROR -> showFailed(card, speaker, message.textValue());
+        }
+    }
+
+    private static void showStopped(MessageCard card, Speaker speaker, String partial) {
+        card.name().setText(ConsiliumBundle.message("card.stopped", speaker.label()));
+        String mark = "*" + ConsiliumBundle.message("answer.stopped.mark") + "*";
+        card.body().setMarkdown(partial.isBlank() ? mark : partial + "\n\n" + mark);
+    }
+
+    private static void showFailed(MessageCard card, Speaker speaker, String detail) {
+        card.name().setText(ConsiliumBundle.message("card.error", speaker.label()));
+        card.body().showError(ConsiliumBundle.message("error.answer", detail), NamedColorUtil.getErrorForeground());
+    }
+
+    private MessageCard newCard(JPanel list, Speaker speaker, String title) {
         JPanel card = new MessageSurface(speaker);
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
 
-        JBLabel name = new JBLabel(pending ? ConsiliumBundle.message("card.thinking", speaker.label()) : speaker.label());
+        JBLabel name = new JBLabel(title);
         name.setFont(name.getFont().deriveFont(Font.BOLD));
         name.setForeground(accent(speaker));
         MessageBody body = new MessageBody();
-        body.setMarkdown(initialText);
         card.add(name, BorderLayout.NORTH);
         card.add(body, BorderLayout.CENTER);
-        messageList.add(card);
-        messageList.add(Box.createVerticalStrut(JBUI.scale(10)));
-        messageList.revalidate();
-        messageList.repaint();
-        scrollToBottom();
+        list.add(card);
+        list.add(Box.createVerticalStrut(JBUI.scale(10)));
         return new MessageCard(name, body);
     }
 
-    // Лента подстраивается под ширину окна, а не растягивается под самую длинную
-    // строку: иначе при сужении окна карточки уезжают под горизонтальную прокрутку.
-    private static final class WidthTrackingPanel extends JPanel implements Scrollable {
-        WidthTrackingPanel() {
+    private void resetTranscript() {
+        messageList.removeAll();
+        history.removeAll();
+        messageList.add(history);
+    }
+
+    private boolean isWelcomeShown() {
+        return history.getComponentCount() == 1 && history.getComponent(0) instanceof WelcomeCard;
+    }
+
+    private void addWelcome() {
+        history.add(new WelcomeCard());
+    }
+
+    private void refreshTranscript() {
+        messageList.revalidate();
+        messageList.repaint();
+        scrollToBottom();
+    }
+
+    private void scrollToBottom() {
+        SwingUtilities.invokeLater(() -> {
+            JScrollBar bar = transcriptScroll.getVerticalScrollBar();
+            bar.setValue(bar.getMaximum());
+        });
+    }
+
+    private String editorContext() {
+        Editor editor = FileEditorManager.getInstance(project).getSelectedTextEditor();
+        if (editor == null) return "";
+        String path = editor.getVirtualFile() == null ? ConsiliumBundle.message("context.current.editor") : editor.getVirtualFile().getPath();
+        String selectedText = editor.getSelectionModel().getSelectedText();
+        if (selectedText == null || selectedText.isBlank()) {
+            return ConsiliumBundle.message("context.file.no.selection", path);
+        }
+        return ConsiliumBundle.message("context.file", path) + "\n```\n" + selectedText + "\n```";
+    }
+
+    private void onUi(Runnable action) {
+        if (disposed) return;
+        SwingUtilities.invokeLater(() -> {
+            if (!disposed) action.run();
+        });
+    }
+
+    @Override
+    public void dispose() {
+        disposed = true;
+        session.dispose();
+    }
+
+    private static Color accent(Speaker speaker) {
+        return switch (speaker) {
+            case USER -> new JBColor(new Color(56, 111, 216), new Color(138, 174, 255));
+            case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
+            case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
+        };
+    }
+
+    private static final class WelcomeCard extends JPanel {
+        WelcomeCard() {
             super(new BorderLayout());
-        }
-
-        @Override
-        public Dimension getPreferredScrollableViewportSize() {
-            return getPreferredSize();
-        }
-
-        @Override
-        public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
-            return JBUI.scale(16);
-        }
-
-        @Override
-        public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
-            return orientation == SwingConstants.VERTICAL ? visible.height : visible.width;
-        }
-
-        @Override
-        public boolean getScrollableTracksViewportWidth() {
-            return true;
-        }
-
-        @Override
-        public boolean getScrollableTracksViewportHeight() {
-            return false;
+            setAlignmentX(Component.LEFT_ALIGNMENT);
+            setBorder(JBUI.Borders.empty(18, 12));
+            setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
+            setOpaque(false);
+            JBTextArea text = new JBTextArea(ConsiliumBundle.message("welcome"));
+            text.setEditable(false);
+            text.setLineWrap(true);
+            text.setWrapStyleWord(true);
+            text.setOpaque(false);
+            text.setBorder(JBUI.Borders.empty());
+            // JTextArea defaults to a monospaced font; next to the card titles that's two typefaces.
+            text.setFont(JBUI.Fonts.label());
+            text.setForeground(JBColor.GRAY);
+            add(text, BorderLayout.CENTER);
         }
     }
 
-    private static JBTextArea messageArea(String value) {
-        JBTextArea area = new JBTextArea(value == null ? "" : value);
-        area.setEditable(false);
-        area.setLineWrap(true);
-        area.setWrapStyleWord(true);
-        area.setOpaque(false);
-        area.setBorder(JBUI.Borders.empty());
-        // JTextArea по умолчанию моноширинная — в карточке рядом с именем это две гарнитуры.
-        area.setFont(JBUI.Fonts.label());
-        return area;
-    }
-
+    /** A card with a soft speaker-tinted fill and a rounded accent bar, like the IDE's own AI chat. */
     private static final class MessageSurface extends JPanel {
         private final Speaker speaker;
 
@@ -392,85 +411,36 @@ final class ConsiliumPanel implements Disposable {
         }
     }
 
-    private static Color accent(Speaker speaker) {
-        return switch (speaker) {
-            case USER -> new JBColor(new Color(56, 111, 216), new Color(138, 174, 255));
-            case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
-            case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
-        };
-    }
-
-    private String editorContext() {
-        Editor editor = FileEditorManager.getInstance(project).getSelectedTextEditor();
-        if (editor == null) return "";
-        String path = editor.getVirtualFile() == null ? ConsiliumBundle.message("context.current.editor") : editor.getVirtualFile().getPath();
-        String selectedText = editor.getSelectionModel().getSelectedText();
-        if (selectedText == null || selectedText.isBlank()) {
-            return ConsiliumBundle.message("context.file.no.selection", path);
+    // The transcript follows the window width instead of growing to its longest line; otherwise
+    // narrowing the window pushes the cards under a horizontal scroll bar.
+    private static final class WidthTrackingPanel extends JPanel implements Scrollable {
+        WidthTrackingPanel() {
+            super(new BorderLayout());
         }
-        return ConsiliumBundle.message("context.file", path) + "\n```\n" + selectedText + "\n```";
-    }
 
-    private void finish(Speaker speaker) {
-        running.remove(speaker);
-        updateControls();
-        scrollToBottom();
-    }
-
-    private void updateControls() {
-        boolean busy = !running.isEmpty();
-        send.setEnabled(!busy);
-        clear.setEnabled(!busy);
-        stop.setEnabled(busy);
-        target.setEnabled(!busy);
-        status.setText(ConsiliumBundle.message(busy ? "status.working" : "status.ready"));
-    }
-
-    private void cancelAll() {
-        for (Map.Entry<Speaker, ActiveRun> entry : new ArrayList<>(running.entrySet())) {
-            entry.getValue().request().cancel();
-            if (!entry.getValue().settled().compareAndSet(false, true)) continue;
-            // Партиал оставляем видимым, но карточка перестаёт врать «думает…»:
-            // отменённый агент listener'а уже не позовёт.
-            MessageCard card = entry.getValue().card();
-            card.name().setText(ConsiliumBundle.message("card.stopped", entry.getKey().label()));
-            // И сохраняем его с пометкой, иначе после перезапуска IDEA он пропадёт.
-            String partial = card.body().markdown().trim();
-            if (!partial.isEmpty()) {
-                store.add(entry.getKey(), partial + "\n\n" + STOPPED_MARK);
-            }
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
         }
-        running.clear();
-        updateControls();
-        status.setText(ConsiliumBundle.message("status.stopped"));
-    }
 
-    private void clear() {
-        if (!running.isEmpty()) return;
-        store.clear();
-        messageList.removeAll();
-        addWelcome();
-        messageList.revalidate();
-        messageList.repaint();
-    }
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
+            return JBUI.scale(16);
+        }
 
-    private void scrollToBottom() {
-        SwingUtilities.invokeLater(() -> {
-            JScrollBar bar = transcriptScroll.getVerticalScrollBar();
-            bar.setValue(bar.getMaximum());
-        });
-    }
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
+            return orientation == SwingConstants.VERTICAL ? visible.height : visible.width;
+        }
 
-    private void onUi(@NotNull Runnable action) {
-        if (disposed) return;
-        SwingUtilities.invokeLater(() -> {
-            if (!disposed) action.run();
-        });
-    }
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
 
-    @Override
-    public void dispose() {
-        disposed = true;
-        cancelAll();
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
     }
 }

@@ -9,7 +9,7 @@ import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** У каждой строки интерфейса есть и английский, и русский вариант — новую не забудут перевести. */
+/** Every interface string exists in English and Russian, so a new one can't ship untranslated. */
 class ConsiliumBundleTest {
     @Test
     void russianHasExactlyTheEnglishKeys() throws IOException {

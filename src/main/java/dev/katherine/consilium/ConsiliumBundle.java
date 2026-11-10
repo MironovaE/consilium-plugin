@@ -7,8 +7,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.PropertyKey;
 
 /**
- * Строки интерфейса и инструкций агентам. Язык выбирает IDE: английский по умолчанию,
- * русский — {@code ConsiliumBundle_ru.properties}, когда IDE запущена с русской локалью.
+ * Interface strings and agent instructions. The IDE picks the language: English by default,
+ * {@code ConsiliumBundle_ru.properties} when the IDE runs with a Russian locale.
  */
 public final class ConsiliumBundle extends DynamicBundle {
     @NonNls
