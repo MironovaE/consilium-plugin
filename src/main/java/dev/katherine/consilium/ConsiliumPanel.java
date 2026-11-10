@@ -26,7 +26,6 @@ import dev.katherine.consilium.model.Speaker;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
-import javax.swing.border.Border;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
@@ -300,11 +299,9 @@ final class ConsiliumPanel implements Disposable {
     }
 
     private MessageCard addMessageCard(Speaker speaker, String initialText, boolean pending) {
-        JPanel card = new JPanel(new BorderLayout(0, JBUI.scale(5)));
+        JPanel card = new MessageSurface(speaker);
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setMaximumSize(new Dimension(JBUI.scale(840), Integer.MAX_VALUE));
-        card.setBorder(cardBorder(speaker));
-        card.setOpaque(false);
 
         JBLabel name = new JBLabel(pending ? ConsiliumBundle.message("card.thinking", speaker.label()) : speaker.label());
         name.setFont(name.getFont().deriveFont(Font.BOLD));
@@ -314,7 +311,7 @@ final class ConsiliumPanel implements Disposable {
         card.add(name, BorderLayout.NORTH);
         card.add(body, BorderLayout.CENTER);
         messageList.add(card);
-        messageList.add(Box.createVerticalStrut(JBUI.scale(8)));
+        messageList.add(Box.createVerticalStrut(JBUI.scale(10)));
         messageList.revalidate();
         messageList.repaint();
         scrollToBottom();
@@ -366,19 +363,38 @@ final class ConsiliumPanel implements Disposable {
         return area;
     }
 
-    private static Border cardBorder(Speaker speaker) {
-        return BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new JBColor(new Color(220, 220, 220), new Color(72, 75, 82))),
-                BorderFactory.createCompoundBorder(
-                        BorderFactory.createMatteBorder(0, JBUI.scale(3), 0, 0, accent(speaker)),
-                        BorderFactory.createEmptyBorder(JBUI.scale(10), JBUI.scale(12), JBUI.scale(10), JBUI.scale(12))
-                )
-        );
+    private static final class MessageSurface extends JPanel {
+        private final Speaker speaker;
+
+        MessageSurface(Speaker speaker) {
+            super(new BorderLayout(0, JBUI.scale(5)));
+            this.speaker = speaker;
+            setOpaque(false);
+            setBorder(JBUI.Borders.empty(11, 16, 11, 14));
+        }
+
+        @Override
+        protected void paintComponent(Graphics graphics) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Color color = accent(speaker);
+                g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), 20));
+                int radius = JBUI.scale(12);
+                g.fillRoundRect(0, 0, getWidth(), getHeight(), radius, radius);
+                g.setColor(color);
+                g.fillRoundRect(0, JBUI.scale(8), JBUI.scale(3), getHeight() - JBUI.scale(16),
+                        JBUI.scale(3), JBUI.scale(3));
+            } finally {
+                g.dispose();
+            }
+            super.paintComponent(graphics);
+        }
     }
 
     private static Color accent(Speaker speaker) {
         return switch (speaker) {
-            case USER -> new JBColor(new Color(177, 122, 16), new Color(231, 176, 70));
+            case USER -> new JBColor(new Color(56, 111, 216), new Color(138, 174, 255));
             case CLAUDE -> new JBColor(new Color(165, 92, 58), new Color(224, 145, 105));
             case CODEX -> new JBColor(new Color(15, 118, 110), new Color(101, 205, 187));
         };
