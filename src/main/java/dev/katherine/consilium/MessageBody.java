@@ -1,20 +1,21 @@
 package dev.katherine.consilium;
 
-import com.intellij.ui.BrowserHyperlinkListener;
+import com.intellij.ide.BrowserUtil;
 import com.intellij.ui.ColorUtil;
 import com.intellij.ui.JBColor;
 import com.intellij.util.ui.HTMLEditorKitBuilder;
 import com.intellij.util.ui.JBUI;
 
 import javax.swing.*;
+import javax.swing.event.HyperlinkEvent;
 import javax.swing.text.DefaultCaret;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 
 /**
- * Текст сообщения в карточке: Markdown, отрисованный в HTML. Исходник храним отдельно —
- * его сохраняет транскрипт и отдаёт «Стоп», а {@code getText()} у HTML-панели вернул бы разметку.
+ * The text of a message card: Markdown rendered to HTML. The source is kept separately because the
+ * transcript saves it and "Stop" hands it back, while {@code getText()} would return the markup.
  */
 final class MessageBody extends JEditorPane {
     private String markdown = "";
@@ -24,11 +25,11 @@ final class MessageBody extends JEditorPane {
         setEditable(false);
         setOpaque(false);
         setBorder(JBUI.Borders.empty());
-        // Шрифт и цвет — как у остальной панели, а не дефолтный Serif у HTML.
+        // Font and color match the rest of the panel instead of HTML's default serif.
         putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         setFont(JBUI.Fonts.label());
-        addHyperlinkListener(new BrowserHyperlinkListener());
-        // Текст можно выделять и копировать, но мигающий курсор в прочитанном сообщении не нужен.
+        addHyperlinkListener(this::onHyperlink);
+        // Text can be selected and copied, but a blinking caret in a read message is noise.
         setCaret(new DefaultCaret() {
             @Override
             public boolean isVisible() {
@@ -61,9 +62,24 @@ final class MessageBody extends JEditorPane {
         setMarkdown(message);
     }
 
-    // Стили собираем при каждой отрисовке: цвет фона кода зависит от темы, а тема может
-    // смениться, пока окно открыто. Поля по умолчанию у абзацев и списков рассчитаны на
-    // страницу и дают в карточке пустую строку сверху.
+    // MarkdownText already strips links with other schemes; checking again here keeps a click
+    // from ever opening file:, javascript: or an app's custom scheme if that layer regresses.
+    // The tooltip shows where a link leads before it is clicked.
+    private void onHyperlink(HyperlinkEvent event) {
+        String url = event.getDescription();
+        if (event.getEventType() == HyperlinkEvent.EventType.ENTERED) {
+            setToolTipText(MarkdownText.isOpenableLink(url) ? url : null);
+        } else if (event.getEventType() == HyperlinkEvent.EventType.EXITED) {
+            setToolTipText(null);
+        } else if (event.getEventType() == HyperlinkEvent.EventType.ACTIVATED && MarkdownText.isOpenableLink(url)) {
+            BrowserUtil.browse(url);
+        }
+    }
+
+    // Styles are built on every render: the code background depends on the theme, and the theme
+    // can change while the window is open. Default paragraph and list margins are meant for a
+    // page and would leave an empty line at the top of a card. No url(...) here: the stylesheet
+    // must not make Swing fetch anything either.
     private static String css() {
         int gap = JBUI.scale(6);
         String codeBackground = ColorUtil.toHtmlColor(new JBColor(new Color(0xF0, 0xF1, 0xF3), new Color(0x2B, 0x2D, 0x30)));
@@ -77,9 +93,9 @@ final class MessageBody extends JEditorPane {
                 + "pre { " + mono + " padding: " + gap + "px; background-color: " + codeBackground + "; }";
     }
 
-    // BasicTextUI сам считает высоту HTML по текущей ширине, но ширину просит под самую длинную
-    // строку без переносов — карточка распёрла бы ленту вбок. Ширину отдаём ту, что дали;
-    // до первой раскладки — скромную, а когда ширина известна, просим раскладку заново.
+    // BasicTextUI computes the HTML height for the current width, but asks for the width of the
+    // longest unwrapped line, which would push the feed sideways. Report the width we were given;
+    // before the first layout, a modest one, and re-layout once the real width is known.
     @Override
     public Dimension getPreferredSize() {
         Dimension preferred = super.getPreferredSize();

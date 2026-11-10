@@ -1,134 +1,167 @@
 package dev.katherine.consilium;
 
-import com.intellij.markdown.utils.MarkdownToHtmlConverterKt;
+import com.intellij.markdown.utils.MarkdownToHtmlConverter;
+import org.intellij.markdown.IElementType;
+import org.intellij.markdown.MarkdownElementTypes;
+import org.intellij.markdown.MarkdownTokenTypes;
+import org.intellij.markdown.ast.ASTNode;
+import org.intellij.markdown.ast.ASTUtilKt;
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor;
+import org.intellij.markdown.html.GeneratingProvider;
+import org.intellij.markdown.html.HtmlGenerator;
+import org.intellij.markdown.parser.LinkMap;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Entities;
+import org.jsoup.safety.Cleaner;
+import org.jsoup.safety.Safelist;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.net.URI;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * Ответы агентов приходят в Markdown; показываем их отрисованными, как в чате, а не со
- * звёздочками и обратными кавычками. Разбор — платформенный конвертер IDEA (GFM).
+ * Agent answers arrive as Markdown; they are shown rendered, as in a chat, rather than with
+ * asterisks and backticks.
+ *
+ * <p>Rendering happens in two layers:
+ * <ol>
+ *   <li><b>Fidelity.</b> The platform's GFM parser decides what is code, so indented blocks,
+ *   indented fences and fences with odd info strings follow CommonMark exactly. Raw HTML that the
+ *   parser recognizes ({@code List<String>} in prose, {@code <img src=…>}) is emitted as
+ *   escaped text instead of being passed through, and Markdown images become their alt text.</li>
+ *   <li><b>Security.</b> The final HTML goes through jsoup's {@link Cleaner} with a strict
+ *   allowlist: only tags Markdown itself produces, and no attribute that can carry a URL except
+ *   {@code href} on {@code a}, limited to http, https and mailto. Swing's HTML kit fetches
+ *   images, {@code <link>} stylesheets, {@code background} and {@code style url(…)} on render,
+ *   so this layer is what guarantees a hostile answer can't make the IDE load anything.</li>
+ * </ol>
+ * The first layer is not trusted for safety; the second is not relied on for fidelity.
+ * jsoup ships with the IntelliJ Platform ({@code intellij.libraries.jsoup}), so no HTML parser of
+ * our own is needed. The platform's {@code DocMarkdownToHtmlConverter} was checked and doesn't
+ * fit: it needs a running IDE and lets {@code <img>} through.
  */
 final class MarkdownText {
     private MarkdownText() {
     }
 
+    /** Link schemes that open on click; anything else renders as plain text. */
+    static final Set<String> LINK_PROTOCOLS = Set.of("http", "https", "mailto");
+
+    private static final MarkdownToHtmlConverter CONVERTER = new MarkdownToHtmlConverter(new TextOnlyRawHtmlFlavour());
+
+    private static final Safelist SAFELIST = new Safelist()
+            .addTags("p", "br", "strong", "b", "em", "i", "code", "pre", "ul", "ol", "li", "blockquote",
+                    "h1", "h2", "h3", "h4", "h5", "h6", "a", "hr",
+                    "table", "thead", "tbody", "tr", "th", "td", "del", "s")
+            .addAttributes("a", "href")
+            .addProtocols("a", "href", LINK_PROTOCOLS.toArray(String[]::new))
+            // Neither can hold a URL; both are validated below so Swing never sees junk.
+            .addAttributes("ol", "start")
+            .addAttributes("th", "align")
+            .addAttributes("td", "align");
+
     static String toHtml(String markdown) {
-        String html = MarkdownToHtmlConverterKt.convertMarkdownToHtml(escapeRawHtml(markdown == null ? "" : markdown));
-        return dropImages(html);
-    }
-
-    private static final Pattern IMAGE = Pattern.compile("<img\\b[^>]*>", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ALT = Pattern.compile("\\balt=\"([^\"]*)\"", Pattern.CASE_INSENSITIVE);
-    private static final Pattern AUTOLINK = Pattern.compile("<(?:https?|mailto):[^\\s<>]*>", Pattern.CASE_INSENSITIVE);
-
-    /**
-     * Markdown-картинку {@code ![](https://…)} конвертер превращает в {@code <img>}, а Swing грузит
-     * её из сети. Сырой {@code <} к этому моменту уже экранирован, так что здесь остаются только
-     * настоящие теги картинок — вместо них показываем подпись.
-     */
-    static String dropImages(String html) {
-        Matcher image = IMAGE.matcher(html);
-        StringBuilder out = new StringBuilder();
-        while (image.find()) {
-            Matcher alt = ALT.matcher(image.group());
-            image.appendReplacement(out, Matcher.quoteReplacement(alt.find() ? alt.group(1) : ""));
-        }
-        image.appendTail(out);
-        return out.toString();
+        return sanitize(CONVERTER.convertMarkdownToHtml(markdown == null ? "" : markdown, null));
     }
 
     /**
-     * Конвертер пропускает сырой HTML как есть, а Swing его исполняет: {@code List<String>} вне
-     * кода пропадает как неизвестный тег, а {@code <img src=http…>} полез бы в сеть. Поэтому
-     * {@code <} вне кода превращаем в сущность. Внутри кода конвертер экранирует сам, а наша
-     * сущность показалась бы буквально — код не трогаем. Санитайзер платформы
-     * ({@code DocMarkdownToHtmlConverter}) не подходит: требует запущенную IDE и пропускает {@code <img>}.
-     * Блоки кода с отступом в четыре пробела не распознаём — агенты пишут код в ```.
+     * Keeps only the allowlisted tags and attributes. Disallowed elements are unwrapped (their
+     * text stays visible), {@code script}/{@code style} contents are dropped, links with other
+     * schemes lose their {@code href} and are unwrapped into plain text. Linear in the input:
+     * one jsoup parse plus one tree walk.
      */
-    static String escapeRawHtml(String markdown) {
-        StringBuilder out = new StringBuilder(markdown.length());
-        String fence = null;
-        for (String line : markdown.split("\n", -1)) {
-            if (!out.isEmpty()) out.append('\n');
-            String opening = fenceOf(line.stripLeading());
-            if (fence == null && opening != null) {
-                fence = opening;
-                out.append(line);
-            } else if (fence != null) {
-                // Закрывает блок забор того же символа не короче открывающего и без хвоста,
-                // как в CommonMark: ```` с примером ``` внутри не закрывается раньше времени.
-                String trimmed = line.strip();
-                if (opening != null && opening.charAt(0) == fence.charAt(0)
-                        && opening.length() >= fence.length() && trimmed.length() == opening.length()) {
-                    fence = null;
+    static String sanitize(String html) {
+        Document dirty = Jsoup.parseBodyFragment(html);
+        // GFM renders ~~text~~ as <span class="user-del">; Swing knows <del>, and the allowlist
+        // has no reason to admit span or class.
+        dirty.body().select("span.user-del").tagName("del");
+        Document clean = new Cleaner(SAFELIST).clean(dirty);
+        for (Element element : clean.body().getAllElements()) {
+            switch (element.normalName()) {
+                case "a" -> {
+                    if (!element.hasAttr("href")) element.unwrap();
                 }
-                out.append(line);
-            } else {
-                out.append(escapeOutsideCodeSpans(line));
+                case "ol" -> {
+                    if (element.hasAttr("start") && !element.attr("start").matches("\\d{1,9}")) {
+                        element.removeAttr("start");
+                    }
+                }
+                case "th", "td" -> {
+                    if (element.hasAttr("align") && !element.attr("align").matches("left|center|right")) {
+                        element.removeAttr("align");
+                    }
+                }
+                default -> {
+                }
             }
         }
-        return out.toString();
+        // Swing's HTML reader is HTML 3.2-era: base entities only (&nbsp; rather than &#xa0;),
+        // and no pretty printing, which would add whitespace inside <pre>.
+        clean.outputSettings().prettyPrint(false).escapeMode(Entities.EscapeMode.base);
+        return clean.body().html();
     }
 
-    private static String fenceOf(String line) {
-        if (line.isEmpty() || (line.charAt(0) != '`' && line.charAt(0) != '~')) return null;
-        int length = 0;
-        while (length < line.length() && line.charAt(length) == line.charAt(0)) length++;
-        return length >= 3 ? line.substring(0, length) : null;
+    /** True for a link the panel may hand to the browser. */
+    static boolean isOpenableLink(String url) {
+        if (url == null) return false;
+        int colon = url.indexOf(':');
+        return colon > 0 && LINK_PROTOCOLS.contains(url.substring(0, colon).toLowerCase(java.util.Locale.ROOT));
     }
 
-    private static String escapeOutsideCodeSpans(String line) {
-        StringBuilder out = new StringBuilder(line.length());
-        int i = 0;
-        while (i < line.length()) {
-            char c = line.charAt(i);
-            if (c == '`') {
-                int run = runLength(line, i);
-                int close = findClosingRun(line, i + run, run);
-                if (close >= 0) {
-                    out.append(line, i, close + run);
-                    i = close + run;
-                    continue;
-                }
-                out.append(line, i, i + run);
-                i += run;
-                continue;
-            }
-            if (c == '<') {
-                // Автоссылка <https://…> — не HTML, конвертер сделает из неё ссылку.
-                Matcher link = AUTOLINK.matcher(line).region(i, line.length());
-                if (link.lookingAt()) {
-                    out.append(link.group());
-                    i = link.end();
-                    continue;
-                }
-                out.append("&lt;");
-            } else {
-                out.append(c);
-            }
-            i++;
+    /**
+     * GFM as the platform renders it, except that raw HTML is shown as text and images as their
+     * alt text. Swapping the generating providers keeps the decision "is this code?" with the
+     * parser instead of guessing it from the Markdown source with regular expressions.
+     */
+    private static final class TextOnlyRawHtmlFlavour extends GFMFlavourDescriptor {
+        TextOnlyRawHtmlFlavour() {
+            super(true, false, false);
         }
-        return out.toString();
+
+        @Override
+        public Map<IElementType, GeneratingProvider> createHtmlGeneratingProviders(LinkMap linkMap, URI baseUri) {
+            Map<IElementType, GeneratingProvider> providers = new HashMap<>(super.createHtmlGeneratingProviders(linkMap, baseUri));
+            providers.put(MarkdownTokenTypes.HTML_TAG, (visitor, text, node) ->
+                    visitor.consumeHtml(Entities.escape(ASTUtilKt.getTextInNode(node, text).toString())));
+            providers.put(MarkdownElementTypes.HTML_BLOCK, MarkdownText::renderHtmlBlockAsText);
+            providers.put(MarkdownElementTypes.IMAGE, (visitor, text, node) ->
+                    visitor.consumeHtml(Entities.escape(altText(node, text))));
+            return providers;
+        }
     }
 
-    private static int runLength(String line, int start) {
-        int end = start;
-        while (end < line.length() && line.charAt(end) == '`') end++;
-        return end - start;
-    }
-
-    private static int findClosingRun(String line, int from, int run) {
-        int i = from;
-        while (i < line.length()) {
-            if (line.charAt(i) == '`') {
-                int length = runLength(line, i);
-                if (length == run) return i;
-                i += length;
-            } else {
-                i++;
+    // An HTML block is a run of lines; showing them as one paragraph with line breaks keeps the
+    // shape the agent typed without interpreting any of it.
+    private static void renderHtmlBlockAsText(HtmlGenerator.HtmlGeneratingVisitor visitor, String text, ASTNode node) {
+        visitor.consumeHtml("<p>");
+        for (ASTNode child : node.getChildren()) {
+            if (child.getType() == MarkdownTokenTypes.HTML_BLOCK_CONTENT) {
+                visitor.consumeHtml(Entities.escape(ASTUtilKt.getTextInNode(child, text).toString()));
+            } else if (child.getType() == MarkdownTokenTypes.EOL) {
+                visitor.consumeHtml("<br>");
             }
         }
-        return -1;
+        visitor.consumeHtml("</p>\n");
+    }
+
+    private static String altText(ASTNode image, String text) {
+        ASTNode label = findLabel(image);
+        if (label == null) return "";
+        String raw = ASTUtilKt.getTextInNode(label, text).toString();
+        return raw.length() >= 2 && raw.startsWith("[") && raw.endsWith("]") ? raw.substring(1, raw.length() - 1) : raw;
+    }
+
+    private static ASTNode findLabel(ASTNode node) {
+        if (node.getType() == MarkdownElementTypes.LINK_TEXT || node.getType() == MarkdownElementTypes.LINK_LABEL) {
+            return node;
+        }
+        for (ASTNode child : node.getChildren()) {
+            ASTNode found = findLabel(child);
+            if (found != null) return found;
+        }
+        return null;
     }
 }
