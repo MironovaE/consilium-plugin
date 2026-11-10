@@ -2,7 +2,7 @@
 
 An IntelliJ IDEA plugin that puts one person, Claude Code, and OpenAI Codex in the same chat.
 
-Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. When it is time to change code, you hand the repository to exactly one of them.
+Working with two coding agents usually means two terminals and copying answers between them. Consilium keeps one shared transcript in a tool window: both agents answer the same message independently, and on the next turn each sees what the other said. When it is time to change code, one agent at a time gets write access, and a bigger task can be split between them.
 
 ![Both agents answer the same question in the Consilium tool window](assets/chat.png)
 
@@ -21,6 +21,8 @@ Each message goes out in one of five modes:
 | Claude does / Codex does | the selected agent only | can edit the repository and run checks |
 
 The one coordination rule: **only one agent may write to the repository per turn.** In a "does" turn the other agent is not started, so two agents never edit the same files at once.
+
+To split a bigger task, let both agents agree in a discussion turn on who owns which files, then give each its part in its own "does" turn. If they should work at the same time, run them side by side in separate git worktrees, each on its own branch, and merge the branches yourself.
 
 How read-only is enforced:
 
