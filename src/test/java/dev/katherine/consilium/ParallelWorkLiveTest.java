@@ -95,7 +95,7 @@ class ParallelWorkLiveTest {
             ChatSession session = new ChatSession(store,
                     speaker -> speaker == Speaker.CLAUDE ? new ClaudeCliAgent() : new CodexCliAgent(),
                     new ClaudeIntentClassifier(), new ParallelWork(new GitCliWorktrees(worktrees)),
-                    repo, ui, command -> new Thread(command).start(), view);
+                    repo, () -> true, ui, command -> new Thread(command).start(), view);
 
             say(ui, session, view, "В репозитории два файла: calc_add.py и calc_mul.py. Нужно добавить функцию add(a, b) "
                     + "в calc_add.py и функцию mul(a, b) в calc_mul.py. Договоритесь коротко, в двух строках: "

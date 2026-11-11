@@ -244,6 +244,7 @@ class ChatSessionTest {
     private final FakeGit git = new FakeGit();
     private final Map<Speaker, FakeAgent> agents = new EnumMap<>(Speaker.class);
     private final RecordingView view = new RecordingView();
+    private boolean trusted = true;
     private ConsiliumStateStore store;
     private ChatSession session;
 
@@ -252,7 +253,7 @@ class ChatSessionTest {
         agents.put(Speaker.CLAUDE, new FakeAgent(Speaker.CLAUDE));
         agents.put(Speaker.CODEX, new FakeAgent(Speaker.CODEX));
         store = new ConsiliumStateStore(new ConsiliumStateStoreTest.MemoryPersistence());
-        session = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+        session = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
     }
 
     private FakeAgent claude() {
@@ -409,7 +410,7 @@ class ChatSessionTest {
     @Test
     void closingTheProjectStoresAFinishedAnswerWhoseCompletionWasStillQueued() {
         Queue<Runnable> edt = new ArrayDeque<>();
-        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, edt::add, Runnable::run, view);
         deferred.send("question", TurnMode.CLAUDE, "");
         claude().last().answer("full answer", "claude-1");
 
@@ -426,7 +427,7 @@ class ChatSessionTest {
     @Test
     void closingTheProjectKeepsAnErrorWhoseReportWasStillQueued() {
         Queue<Runnable> edt = new ArrayDeque<>();
-        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, edt::add, Runnable::run, view);
         deferred.send("question", TurnMode.CODEX, "");
         FakeRun run = codex().last();
         run.listener.onTextDelta("half");
@@ -476,7 +477,7 @@ class ChatSessionTest {
     @Test
     void stopDoesNotCutOffAnAnswerThatAlreadyArrived() {
         Queue<Runnable> edt = new ArrayDeque<>();
-        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, edt::add, Runnable::run, view);
         deferred.send("question", TurnMode.CLAUDE, "");
         FakeRun run = claude().last();
         run.listener.onTextDelta("full answer");
@@ -571,6 +572,36 @@ class ChatSessionTest {
     }
 
     @Test
+    void anUntrustedProjectGetsWritersWithoutItsOwnSettings() {
+        trusted = false;
+        session.send("fix the parser", TurnMode.CLAUDE_WRITES, "");
+        assertEquals(AgentAccess.WRITE_ISOLATED, claude().last().access);
+        claude().last().answer("fixed", "c1");
+
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CODEX));
+        session.send("codex, fix the layout", TurnMode.AUTO, "");
+        assertEquals(AgentAccess.WRITE_ISOLATED, codex().last().access);
+        codex().last().answer("fixed", "x1");
+
+        trusted = true;
+        session.send("claude, now the tests", TurnMode.CLAUDE_WRITES, "");
+        assertEquals(AgentAccess.WRITE, claude().last().access, "trust is asked at every write turn");
+    }
+
+    @Test
+    void theMergeInAnUntrustedProjectRunsWithoutItsSettings() {
+        trusted = false;
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().answer("cards done", "c1");
+        codex().last().answer("layout done", "x1");
+
+        FakeRun merge = claude().last();
+        assertEquals(Path.of("/project"), merge.root);
+        assertEquals(AgentAccess.WRITE_ISOLATED, merge.access);
+    }
+
+    @Test
     void anUnclearMessageAsksInsteadOfStartingWork() {
         classifier.next = new Intent(Intent.Kind.UNCLEAR, Set.of());
         session.send("ok", TurnMode.AUTO, "");
@@ -593,7 +624,8 @@ class ChatSessionTest {
         FakeRun codexPart = codex().last();
         assertEquals(Path.of("/wt/claude"), claudePart.root);
         assertEquals(Path.of("/wt/codex"), codexPart.root);
-        assertEquals(AgentAccess.WRITE, claudePart.access);
+        assertEquals(AgentAccess.WRITE_ISOLATED, claudePart.access, "a copy never loads the project's settings");
+        assertEquals(AgentAccess.WRITE_ISOLATED, codexPart.access);
         assertTrue(claudePart.prompt.contains("consilium/claude-1"), claudePart.prompt);
         assertTrue(claudePart.prompt.contains("I take the layout."), "each part sees the agreement");
         assertEquals(2, store.pendingWork().size());
@@ -734,7 +766,7 @@ class ChatSessionTest {
     @Test
     void aLateStepAfterStopDoesNotFreeTheRoom() {
         Queue<Runnable> work = new ArrayDeque<>();
-        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted,
                 Runnable::run, work::add, view);
         classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
         queued.send("go ahead", TurnMode.AUTO, "");
@@ -753,7 +785,7 @@ class ChatSessionTest {
     @Test
     void stopDuringCleanupStillRecordsWhatIsOnDisk() {
         Queue<Runnable> work = new ArrayDeque<>();
-        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+        ChatSession queued = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted,
                 Runnable::run, work::add, view);
         classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
         queued.send("go ahead", TurnMode.AUTO, "");
@@ -774,8 +806,8 @@ class ChatSessionTest {
         failBothParts();
         int before = notices().size();
 
-        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
-        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
 
         assertEquals(before + 1, notices().size());
         assertEquals(ConsiliumBundle.message("notice.pending", "consilium/claude-1, consilium/codex-1"), notices().getLast());
@@ -787,7 +819,7 @@ class ChatSessionTest {
         git.branches.clear();
         int before = notices().size();
 
-        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
 
         assertTrue(store.pendingWork().isEmpty());
         assertEquals(before, notices().size(), "no notice about work that isn't there");
@@ -799,7 +831,7 @@ class ChatSessionTest {
         git.branches.remove("consilium/claude-1");
         Queue<Runnable> work = new ArrayDeque<>();
 
-        ChatSession restarted = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+        ChatSession restarted = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted,
                 Runnable::run, work::add, view);
 
         assertEquals(ChatSession.State.WORKING, restarted.state(), "busy until git answers");
@@ -837,7 +869,7 @@ class ChatSessionTest {
     void aRecordPointingOutsideConsiliumsFolderIsDropped() {
         store.setPendingWork(List.of(new PendingWork(Speaker.CODEX, "/Users/someone/project", "consilium/codex-1", "0123abcd")));
 
-        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
 
         assertTrue(store.pendingWork().isEmpty());
     }

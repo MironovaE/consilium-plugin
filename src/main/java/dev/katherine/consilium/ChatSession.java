@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /**
@@ -158,12 +159,14 @@ final class ChatSession {
 
         @Override
         public void startPart(Speaker agent, Worktree worktree, List<ChatMessage> snapshot, String editorContext, String header) {
-            start(agent, AgentAccess.WRITE, Role.PART, snapshot, editorContext, worktree.path(), header);
+            // A copy's project settings are files the agents themselves can write, so they never
+            // load there, whatever IntelliJ thinks of the project.
+            start(agent, AgentAccess.WRITE_ISOLATED, Role.PART, snapshot, editorContext, worktree.path(), header);
         }
 
         @Override
         public void startMerge(Speaker integrator, String header) {
-            start(integrator, AgentAccess.WRITE, Role.MERGE, store.messages(), "", projectRoot, header);
+            start(integrator, projectWriteAccess(), Role.MERGE, store.messages(), "", projectRoot, header);
         }
 
         @Override
@@ -176,6 +179,7 @@ final class ChatSession {
     private final Function<Speaker, CliAgent> agents;
     private final IntentClassifier classifier;
     private final Path projectRoot;
+    private final BooleanSupplier projectTrusted;
     private final Executor ui;
     private final View view;
     private final Map<Speaker, Run> runs = new EnumMap<>(Speaker.class);
@@ -183,12 +187,18 @@ final class ChatSession {
     private final ParallelTask parallelTask;
     private volatile boolean disposed;
 
+    /**
+     * @param projectTrusted whether IntelliJ trusts the project, asked at the start of every write
+     *                       turn in it: only then may the agent load the project's own settings
+     */
     ChatSession(ConsiliumStateStore store, Function<Speaker, CliAgent> agents, IntentClassifier classifier,
-                ParallelWork parallelWork, Path projectRoot, Executor ui, Executor background, View view) {
+                ParallelWork parallelWork, Path projectRoot, BooleanSupplier projectTrusted, Executor ui,
+                Executor background, View view) {
         this.store = store;
         this.agents = agents;
         this.classifier = classifier;
         this.projectRoot = projectRoot;
+        this.projectTrusted = projectTrusted;
         this.ui = ui;
         this.view = view;
         this.steps = new Steps(background, this::onUi, () -> view.stateChanged(state()));
@@ -221,7 +231,7 @@ final class ChatSession {
                 act(intent != null ? intent : Intent.discussWithBoth(), editorContext);
             }));
         } else {
-            startTurn(mode.agents(), mode.access(), editorContext);
+            startTurn(mode.agents(), mode.writes() ? projectWriteAccess() : AgentAccess.READ_ONLY, editorContext);
         }
         view.stateChanged(state());
         return true;
@@ -232,7 +242,7 @@ final class ChatSession {
             case DISCUSS -> startTurn(intent.agents(), AgentAccess.READ_ONLY, editorContext);
             case WORK -> {
                 if (intent.agents().size() == 1) {
-                    startTurn(intent.agents(), AgentAccess.WRITE, editorContext);
+                    startTurn(intent.agents(), projectWriteAccess(), editorContext);
                 } else {
                     parallelTask.start(editorContext);
                 }
@@ -240,7 +250,7 @@ final class ChatSession {
             case INTEGRATE -> {
                 if (store.pendingWork().isEmpty()) {
                     // Nothing of ours to merge: the person means some other branches; it's an ordinary task.
-                    startTurn(intent.agents(), AgentAccess.WRITE, editorContext);
+                    startTurn(intent.agents(), projectWriteAccess(), editorContext);
                 } else {
                     parallelTask.merge(intent.agents().iterator().next());
                 }
@@ -248,6 +258,15 @@ final class ChatSession {
             case UNCLEAR -> notice(ConsiliumBundle.message("notice.unclear"));
         }
         view.stateChanged(state());
+    }
+
+    /**
+     * Write access in the project itself. Its own agent settings (hooks, MCP servers) are files a
+     * cloned repository ships, so they load only when IntelliJ trusts the project, the same promise
+     * the IDE makes about running the project's build scripts.
+     */
+    private AgentAccess projectWriteAccess() {
+        return projectTrusted.getAsBoolean() ? AgentAccess.WRITE : AgentAccess.WRITE_ISOLATED;
     }
 
     private void startTurn(Collection<Speaker> speakers, AgentAccess access, String editorContext) {

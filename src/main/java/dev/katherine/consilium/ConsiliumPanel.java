@@ -2,6 +2,7 @@ package dev.katherine.consilium;
 
 import com.intellij.ide.plugins.IdeaPluginDescriptor;
 import com.intellij.ide.plugins.PluginManagerCore;
+import com.intellij.ide.trustedProjects.TrustedProjects;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.extensions.PluginId;
@@ -68,7 +69,8 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
         // directory, which may be "/". Such a panel stays read-only and says why.
         Path rootPath = hasProjectRoot ? Path.of(basePath) : Path.of(System.getProperty("user.home"));
         session = new ChatSession(new ConsiliumStateStore(project), ConsiliumPanel::agentFor, new ClaudeIntentClassifier(),
-                new ParallelWork(new GitCliWorktrees()), rootPath, this::onUi, AppExecutorUtil.getAppExecutorService(), this);
+                new ParallelWork(new GitCliWorktrees()), rootPath, () -> TrustedProjects.isProjectTrusted(project),
+                this::onUi, AppExecutorUtil.getAppExecutorService(), this);
 
         messageList.setLayout(new BoxLayout(messageList, BoxLayout.Y_AXIS));
         history.setLayout(new BoxLayout(history, BoxLayout.Y_AXIS));
