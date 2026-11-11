@@ -30,12 +30,17 @@ final class MessageBody extends JEditorPane {
         setFont(JBUI.Fonts.label());
         addHyperlinkListener(this::onHyperlink);
         // Text can be selected and copied, but a blinking caret in a read message is noise.
-        setCaret(new DefaultCaret() {
+        DefaultCaret caret = new DefaultCaret() {
             @Override
             public boolean isVisible() {
                 return false;
             }
-        });
+        };
+        // Every setText moves the caret to the new text, and DefaultCaret scrolls every enclosing
+        // viewport to keep it in view, so each streamed chunk dragged a reader who had scrolled
+        // up down to the answer. Whether the transcript follows is ConsiliumPanel's decision.
+        caret.setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
+        setCaret(caret);
         addComponentListener(new ComponentAdapter() {
             private int laidOutWidth = -1;
 
