@@ -4,6 +4,7 @@ import dev.katherine.consilium.ConsiliumBundle;
 
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.util.concurrency.AppExecutorUtil;
 import org.jetbrains.annotations.Nullable;
 
@@ -30,6 +31,12 @@ final class CliRun implements RunningRequest {
     // If the tree is gone but the reader is still blocked (a process escaped the tree and holds
     // stdout), the turn is settled from the exit code after this pause, so the card can't hang.
     private static final Duration STUCK_READER_GRACE = Duration.ofSeconds(2);
+    /**
+     * The most answer text one turn may deliver, in chars. BoundedLineReader caps a single line, but
+     * deltas add up: a CLI stuck in a loop would grow the card, the transcript in workspace.xml and
+     * the next prompt without limit. A real answer is a few KB; this is far above any of them.
+     */
+    static final int MAX_ANSWER_CHARS = 4 * 1024 * 1024;
     private static final Logger LOG = Logger.getInstance(CliRun.class);
 
     @FunctionalInterface
@@ -40,6 +47,7 @@ final class CliRun implements RunningRequest {
     private final String label;
     private final AgentListener listener;
     private final CliEventParser parser;
+    private final int maxAnswerChars;
     private final OutputTail tail = new OutputTail(OutputTail.DEFAULT_CAPACITY);
     private final CompletableFuture<Void> terminated = new CompletableFuture<>();
 
@@ -47,6 +55,8 @@ final class CliRun implements RunningRequest {
     // not "no callbacks that start later".
     private final Object deliveryLock = new Object();
     private boolean settled; // guarded by deliveryLock
+    private long answerChars; // guarded by deliveryLock
+    private volatile boolean answerTooLong;
 
     private volatile boolean cancelled;
     private volatile @Nullable ProcessTree tree;
@@ -62,7 +72,15 @@ final class CliRun implements RunningRequest {
         @Override
         public void onTextDelta(String text) {
             synchronized (deliveryLock) {
-                if (!settled) listener.onTextDelta(text);
+                if (settled) return;
+                answerChars += text.length();
+                if (answerChars > maxAnswerChars) {
+                    // The reader stops the tree when it sees the flag; nothing more is delivered.
+                    answerTooLong = true;
+                    settle(ConsiliumBundle.message("error.answer.too.long", label, StringUtil.formatFileSize(maxAnswerChars)));
+                    return;
+                }
+                listener.onTextDelta(text);
             }
         }
 
@@ -78,9 +96,15 @@ final class CliRun implements RunningRequest {
     };
 
     CliRun(String label, AgentListener listener, CliEventParser parser) {
+        this(label, listener, parser, MAX_ANSWER_CHARS);
+    }
+
+    /** @param maxAnswerChars tests lower it to reach the cap with a small fake CLI */
+    CliRun(String label, AgentListener listener, CliEventParser parser, int maxAnswerChars) {
         this.label = label;
         this.listener = listener;
         this.parser = parser;
+        this.maxAnswerChars = maxAnswerChars;
     }
 
     @Override
@@ -171,6 +195,11 @@ final class CliRun implements RunningRequest {
                     continue;
                 }
                 CliEventParser.TurnOutcome outcome = parser.handle(event, guardedListener);
+                if (answerTooLong) {
+                    // Already reported; the CLI may be looping, so it doesn't get the exit grace.
+                    if (processTree != null) processTree.stop();
+                    return true;
+                }
                 if (outcome != null) {
                     // The CLI is still alive here, so this is the last chance to see its children.
                     if (processTree != null) processTree.recordDescendants();

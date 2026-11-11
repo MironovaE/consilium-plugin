@@ -146,6 +146,29 @@ class CliRunTest {
     }
 
     @Test
+    void anAnswerPastTheCapStopsTheTurnAndIsReportedAsCut() throws Exception {
+        // A CLI stuck in a loop: it streams deltas and never ends the turn on its own.
+        String delta = "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"text\":\""
+                + "x".repeat(100) + "\"}}}";
+        Path cli = script("cat > /dev/null\necho $$ > '" + dir.resolve("root.pid") + "'\n"
+                + "while true; do echo '" + delta + "'; done");
+        Recorder listener = new Recorder();
+        CliRun run = new CliRun("Claude", listener, new ClaudeCliAgent.EventParser(), 1_000);
+        Thread runner = new Thread(() -> run.run(() -> new ProcessBuilder(cli.toString()).directory(project().toFile()).start(), "prompt"));
+        runner.start();
+
+        String outcome = listener.awaitOutcome();
+        assertTrue(outcome.startsWith("error:Claude's answer grew past"), outcome);
+        long delivered = listener.events().stream().filter(event -> event.startsWith("text:"))
+                .mapToLong(event -> event.length() - "text:".length()).sum();
+        assertEquals(1_000, delivered, "everything up to the cap and nothing past it");
+        awaitTerminated(run);
+        assertGone(pid("root.pid"));
+        runner.join(TimeUnit.SECONDS.toMillis(20));
+        assertFalse(runner.isAlive(), "the reader must not keep reading a stopped CLI");
+    }
+
+    @Test
     void claudeTurnCompletesWithStreamedTextAndReceivesThePrompt() throws Exception {
         Path cli = script("cat > '" + dir.resolve("stdin") + "'\n"
                 + "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s-1\"}'\n"
