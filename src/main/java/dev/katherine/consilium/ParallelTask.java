@@ -72,18 +72,25 @@ final class ParallelTask {
     }
 
     /**
-     * After a restart: says once that work is still waiting on its branches. Records come back from
-     * workspace.xml; only worktrees in Consilium's own folder are trusted.
+     * After a restart: forgets records of branches that are gone (the person may have merged or
+     * deleted them meanwhile) and says once that the rest is still waiting. Records pointing outside
+     * Consilium's folder are dropped at once, before any step could hand them to git; asking git
+     * which branches remain blocks, so that runs as a step.
      */
     void restore() {
         List<PendingWork> recorded = store.pendingWork();
-        List<PendingWork> waiting = parallelWork.owned(recorded);
-        if (waiting.size() != recorded.size()) store.setPendingWork(waiting);
-        if (waiting.isEmpty()) return;
-        String text = ConsiliumBundle.message("notice.pending", branches(waiting));
-        List<ChatMessage> messages = store.messages();
-        boolean alreadySaid = !messages.isEmpty() && text.equals(messages.getLast().textValue());
-        if (!alreadySaid) store.add(Speaker.CONSILIUM, text, MessageStatus.ANSWER);
+        List<PendingWork> owned = parallelWork.owned(recorded);
+        if (owned.size() != recorded.size()) store.setPendingWork(owned);
+        if (owned.isEmpty()) return;
+        // Stopped before git answered, the records stay as they are: the next "merge" checks them again.
+        steps.run(() -> parallelWork.stillThere(projectRoot, owned), present -> {
+            store.setPendingWork(present);
+            if (present.isEmpty()) return;
+            String text = ConsiliumBundle.message("notice.pending", branches(present));
+            List<ChatMessage> messages = store.messages();
+            boolean alreadySaid = !messages.isEmpty() && text.equals(messages.getLast().textValue());
+            if (!alreadySaid) host.notice(text);
+        });
     }
 
     /** "Go ahead" to both: a worktree each, unless earlier parts still wait to be merged. */

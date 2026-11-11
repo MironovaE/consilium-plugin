@@ -782,6 +782,35 @@ class ChatSessionTest {
     }
 
     @Test
+    void afterARestartBranchesThatAreGoneAreForgottenQuietly() {
+        failBothParts();
+        git.branches.clear();
+        int before = notices().size();
+
+        new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), Runnable::run, Runnable::run, view);
+
+        assertTrue(store.pendingWork().isEmpty());
+        assertEquals(before, notices().size(), "no notice about work that isn't there");
+    }
+
+    @Test
+    void afterARestartGitIsAskedInTheBackground() {
+        failBothParts();
+        git.branches.remove("consilium/claude-1");
+        Queue<Runnable> work = new ArrayDeque<>();
+
+        ChatSession restarted = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"),
+                Runnable::run, work::add, view);
+
+        assertEquals(ChatSession.State.WORKING, restarted.state(), "busy until git answers");
+        assertEquals(2, store.pendingWork().size());
+        while (!work.isEmpty()) work.poll().run();
+        assertEquals(ChatSession.State.READY, view.state);
+        assertEquals(List.of("consilium/codex-1"), store.pendingWork().stream().map(part -> part.branch).toList());
+        assertEquals(ConsiliumBundle.message("notice.pending", "consilium/codex-1"), notices().getLast());
+    }
+
+    @Test
     void noticesNeverReachTheAgents() {
         classifier.next = new Intent(Intent.Kind.UNCLEAR, Set.of());
         session.send("ok", TurnMode.AUTO, "");
