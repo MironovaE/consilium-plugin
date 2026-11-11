@@ -33,7 +33,7 @@ final class CliRun implements RunningRequest {
     private static final Duration STUCK_READER_GRACE = Duration.ofSeconds(2);
     /**
      * The most answer text one turn may deliver, in chars. BoundedLineReader caps a single line, but
-     * deltas add up: a CLI stuck in a loop would grow the card, the transcript in workspace.xml and
+     * deltas add up: a CLI stuck in a loop would grow the card, the stored transcript and
      * the next prompt without limit. A real answer is a few KB; this is far above any of them.
      */
     static final int MAX_ANSWER_CHARS = 4 * 1024 * 1024;

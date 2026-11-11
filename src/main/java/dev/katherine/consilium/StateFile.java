@@ -83,18 +83,6 @@ final class StateFile implements ConsiliumStateStore.Persistence {
         }
     }
 
-    @Override
-    public void erase() {
-        synchronized (writeLock) {
-            pending.set(null);
-            try {
-                Files.deleteIfExists(file);
-            } catch (IOException exception) {
-                LOG.warn("Couldn't delete " + file, exception);
-            }
-        }
-    }
-
     private void write(String value) {
         Path folder = file.getParent();
         boolean posix = folder.getFileSystem().supportedFileAttributeViews().contains("posix");

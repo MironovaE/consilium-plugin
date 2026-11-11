@@ -54,22 +54,6 @@ class StateFileTest {
     }
 
     @Test
-    void eraseDropsThePendingSaveAndTheFile() {
-        Queue<Runnable> writer = new ArrayDeque<>();
-        Path path = folder.resolve("project.json");
-        StateFile file = new StateFile(path, writer::add);
-        file.save("old");
-        file.flush();
-        file.save("pending");
-
-        file.erase();
-        while (!writer.isEmpty()) writer.poll().run();
-
-        assertFalse(Files.exists(path));
-        assertNull(file.load());
-    }
-
-    @Test
     void aMissingFileLoadsAsNothing() {
         assertNull(new StateFile(folder.resolve("absent.json"), Runnable::run).load());
     }

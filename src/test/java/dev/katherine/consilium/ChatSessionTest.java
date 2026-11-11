@@ -176,6 +176,7 @@ class ChatSessionTest {
         final List<Worktree> removed = new ArrayList<>();
         final List<String> committed = new ArrayList<>();
         final Set<String> branches = new java.util.HashSet<>();
+        final Map<String, String> nested = new HashMap<>();
 
         @Override
         public Path repositoryRoot(Path projectRoot) {
@@ -224,7 +225,7 @@ class ChatSessionTest {
 
         @Override
         public String nestedRepository(Worktree worktree) {
-            return null;
+            return nested.get(worktree.branch());
         }
 
         @Override
@@ -887,6 +888,18 @@ class ChatSessionTest {
 
         assertEquals(2, git.committed.size(), "the parts are committed before the merge");
         assertTrue(claude().last().prompt.contains("consilium/claude-1"), claude().last().prompt);
+    }
+
+    @Test
+    void mergeNamesANestedRepositoryInsteadOfSayingThereIsNothing() {
+        failBothParts();
+        git.nested.put("consilium/codex-1", "vendor/lib");
+        git.commits.clear();
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
+
+        session.send("merge", TurnMode.AUTO, "");
+
+        assertTrue(notices().getLast().contains("vendor/lib"), notices().getLast());
     }
 
     @Test

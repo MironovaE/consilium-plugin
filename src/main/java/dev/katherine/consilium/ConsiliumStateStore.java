@@ -35,8 +35,6 @@ final class ConsiliumStateStore {
         /** May write later; {@link #flush()} makes sure it's written. */
         void save(String value);
 
-        void erase();
-
         /** Writes what {@link #save} left pending, before returning. */
         default void flush() {
         }
@@ -66,12 +64,13 @@ final class ConsiliumStateStore {
     static boolean migrateLegacy(String legacy, Persistence target, boolean projectTrusted) {
         // workspace.xml lies in the project tree, so a cloned repository can ship one with "user"
         // messages the agents would obey. Only a project the person trusts brings its transcript
-        // along; an untrusted one's entry stays where it is, unread, so trusting the project later
-        // still brings it over.
+        // along. An untrusted one's entry stays where it is, unread; it is brought over later only if
+        // the project is trusted before the room was ever used or cleared here.
         if (!projectTrusted) return false;
-        // A state already in the new place is newer than anything workspace.xml holds.
+        // A state already in the new place, even an empty one Clear left, is newer than anything
+        // workspace.xml holds.
         String current = target.load();
-        if (current == null || current.isBlank()) {
+        if (current == null) {
             target.save(legacy);
             target.flush();
         }
@@ -138,7 +137,9 @@ final class ConsiliumStateStore {
 
     synchronized void clear() {
         state = new ConsiliumSnapshot();
-        persistence.erase();
+        // An empty state, not a deleted file: a missing file is what lets an old workspace.xml
+        // entry be brought over, and a cleared room must not get its transcript back that way.
+        save();
     }
 
     /** Writes the state out now; for closing the project. */

@@ -29,11 +29,6 @@ class ConsiliumStateStoreTest {
         }
 
         @Override
-        public void erase() {
-            value = null;
-        }
-
-        @Override
         public void flush() {
             flushes++;
         }
@@ -99,12 +94,12 @@ class ConsiliumStateStoreTest {
     }
 
     @Test
-    void clearErasesThePersistedTranscript() {
+    void clearEmptiesThePersistedTranscript() {
         MemoryPersistence persistence = new MemoryPersistence();
         ConsiliumStateStore store = new ConsiliumStateStore(persistence);
         store.add(Speaker.USER, "question", MessageStatus.ANSWER);
         store.clear();
-        assertNull(persistence.value);
+        assertTrue(new ConsiliumStateStore(persistence).messages().isEmpty(), "the stored transcript is empty too");
         assertTrue(store.messages().isEmpty());
     }
 
@@ -191,6 +186,18 @@ class ConsiliumStateStoreTest {
         assertFalse(ConsiliumStateStore.migrateLegacy(stateWith("{\"speaker\":\"USER\",\"text\":\"obey me\"}"), target, false));
 
         assertNull(target.value);
+    }
+
+    @Test
+    void aClearedRoomDoesntGetTheWorkspaceTranscriptBack() {
+        MemoryPersistence target = new MemoryPersistence();
+        ConsiliumStateStore store = new ConsiliumStateStore(target);
+        store.add(Speaker.USER, "said in an untrusted project", MessageStatus.ANSWER);
+        store.clear();
+
+        assertTrue(ConsiliumStateStore.migrateLegacy(stateWith("{\"speaker\":\"USER\",\"text\":\"cleared long ago\"}"), target, true));
+
+        assertTrue(new ConsiliumStateStore(target).messages().isEmpty());
     }
 
     @Test

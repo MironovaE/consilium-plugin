@@ -208,7 +208,9 @@ final class ParallelTask {
             parallelWork.commitParts(present, Map.of());
             List<Speaker> idle = parallelWork.withoutCommits(projectRoot, present);
             List<PendingWork> withWork = present.stream().filter(part -> !idle.contains(part.agentValue())).toList();
-            List<ParallelWork.Held> held = parallelWork.needingReview(projectRoot, withWork);
+            // Every part is checked, not only those with commits: a part holding another repository
+            // is never committed, and "nothing to merge" would hide why it stays.
+            List<ParallelWork.Held> held = parallelWork.needingReview(projectRoot, present);
             boolean dirty = !withWork.isEmpty() && parallelWork.projectIsDirty(projectRoot);
             return new Mergeable(present, withWork, held, dirty);
         }, mergeable -> {
@@ -218,10 +220,10 @@ final class ParallelTask {
             List<ParallelWork.Held> untold = mergeable.held().stream()
                     .filter(held -> !reviewAnnounced.contains(held.part().branch))
                     .toList();
-            if (mergeable.withWork().isEmpty()) {
-                host.notice(ConsiliumBundle.message("notice.merge.nothing"));
-            } else if (!untold.isEmpty()) {
+            if (!untold.isEmpty()) {
                 announceReview(untold);
+            } else if (mergeable.withWork().isEmpty()) {
+                host.notice(ConsiliumBundle.message("notice.merge.nothing"));
             } else if (mergeable.projectDirty()) {
                 host.notice(ConsiliumBundle.message("notice.merge.dirty", branches(mergeable.withWork())));
             } else {
@@ -242,7 +244,7 @@ final class ParallelTask {
         return switch (held.reason()) {
             case HOOKS -> ConsiliumBundle.message("notice.merge.hooks", branch, held.path());
             case AGENT_SETTINGS -> ConsiliumBundle.message("notice.merge.agent.settings", branch, held.path());
-            case NESTED_REPOSITORY -> ConsiliumBundle.message("notice.merge.nested", branch, held.path());
+            case NESTED_REPOSITORY -> ConsiliumBundle.message("notice.merge.nested", branch, held.path(), held.part().path);
             case UNCHECKED -> ConsiliumBundle.message("notice.merge.unchecked", branch);
         };
     }

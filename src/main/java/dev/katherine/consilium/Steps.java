@@ -1,5 +1,7 @@
 package dev.katherine.consilium;
 
+import com.intellij.openapi.diagnostic.Logger;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -16,6 +18,7 @@ import java.util.function.Supplier;
  * runs elsewhere.
  */
 final class Steps {
+    private static final Logger LOG = Logger.getInstance(Steps.class);
     private final Set<Object> active = new HashSet<>();
     private final Executor background;
     private final Executor ui;
@@ -67,7 +70,18 @@ final class Steps {
     <T> void run(Supplier<T> work, Consumer<T> done, Consumer<T> dropped) {
         Object step = begin();
         background.execute(() -> {
-            T result = work.get();
+            T result;
+            try {
+                result = work.get();
+            } catch (RuntimeException exception) {
+                // Without this the step never ends and the room stays busy until Stop.
+                LOG.warn("A Consilium step failed", exception);
+                ui.execute(() -> {
+                    end(step);
+                    changed.run();
+                });
+                return;
+            }
             ui.execute(() -> {
                 if (end(step)) {
                     done.accept(result);
