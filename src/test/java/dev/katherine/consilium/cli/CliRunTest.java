@@ -127,6 +127,20 @@ class CliRunTest {
     }
 
     @Test
+    void isolatedWriteTurnLoadsTheUserSettingsItselfAndGetsNoSettingsFile() throws Exception {
+        Path settings = dir.resolve("user-settings.json");
+        Files.writeString(settings, "{\"model\": \"haiku\"}");
+        Path args = dir.resolve("args");
+        Path cli = script("cat > /dev/null\nprintf '%s\\n' \"$@\" > '" + args + "'\necho '" + CLAUDE_RESULT + "'");
+        Recorder listener = new Recorder();
+        RunningRequest request = new ClaudeCliAgent(cli, settings).start(project(), "prompt", null, AgentAccess.WRITE_ISOLATED, listener);
+
+        assertEquals("completed", listener.awaitOutcome());
+        awaitTerminated(request);
+        assertEquals(ClaudeCliAgent.arguments(null, AgentAccess.WRITE_ISOLATED, null), Files.readAllLines(args));
+    }
+
+    @Test
     void claudeTurnCompletesWithStreamedTextAndReceivesThePrompt() throws Exception {
         Path cli = script("cat > '" + dir.resolve("stdin") + "'\n"
                 + "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s-1\"}'\n"

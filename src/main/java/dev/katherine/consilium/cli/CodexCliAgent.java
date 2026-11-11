@@ -68,9 +68,15 @@ public final class CodexCliAgent extends AbstractCliAgent {
             command.add("--json");
             command.add("--sandbox");
             command.add(access.writes() ? "workspace-write" : "read-only");
-            if (!access.writes()) {
-                addNoEscalation(command);
-                command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
+            switch (access) {
+                case READ_ONLY -> {
+                    addNoEscalation(command);
+                    command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
+                }
+                case WRITE -> {
+                    // A trusted project's own config applies, as in a terminal.
+                }
+                case WRITE_ISOLATED -> addUntrustedProject(command, projectRoot);
             }
             command.add("--cd");
             command.add(projectRoot.toString());
@@ -78,6 +84,48 @@ public final class CodexCliAgent extends AbstractCliAgent {
             command.add("-");
         }
         return command;
+    }
+
+    /**
+     * Keeps the project's {@code .codex/config.toml} out of the turn. codex-cli 0.167.0 loads it
+     * (MCP servers that run outside the sandbox included) for a trusted project, a linked worktree
+     * of one, and also for any directory a non-read-only {@code exec} runs in: such a run records
+     * the directory as trusted in the user's config without asking. Marking the root untrusted for
+     * this run stops both, while the user's own config still applies. Untrusted also turns the
+     * default approval policy into "untrusted", which exec can't answer, so every command would
+     * fail; "on-request" is what a trusted project gets by default, so the person's reviewer setup
+     * works as in any write turn. Checked 2026-11-11 with a project MCP server that touches a
+     * marker: it started without these overrides and didn't with them, in a plain directory and in
+     * a worktree of a trusted repository, and the turn still wrote its file.
+     *
+     * <p>The root goes into the value, not the dotted key: {@code -c} keys don't unquote TOML quoted
+     * keys (see CodexMcpServers), while the value is parsed as TOML.
+     */
+    private static void addUntrustedProject(List<String> command, Path projectRoot) {
+        command.add("-c");
+        command.add("projects={" + tomlString(projectRoot.toString()) + "={trust_level=\"untrusted\"}}");
+        command.add("-c");
+        command.add("approval_policy=\"on-request\"");
+    }
+
+    /** A TOML basic string. Codex falls back to the raw text when a value doesn't parse, so it must always parse. */
+    static String tomlString(String value) {
+        StringBuilder quoted = new StringBuilder("\"");
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> quoted.append("\\\"");
+                case '\\' -> quoted.append("\\\\");
+                default -> {
+                    if (c < 0x20 || c == 0x7f) {
+                        quoted.append(String.format("\\u%04X", (int) c));
+                    } else {
+                        quoted.append(c);
+                    }
+                }
+            }
+        }
+        return quoted.append('"').toString();
     }
 
     // Without this a denied write is retried with an escalation request, and an auto-approving

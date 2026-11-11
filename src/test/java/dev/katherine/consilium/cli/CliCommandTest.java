@@ -16,7 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Pins the CLI flags the plugin relies on. When a CLI upgrade breaks a turn,
  * re-check these lists against `claude --help`, `codex exec --help` and `codex exec resume --help`.
  * Last checked: Claude Code 2.1.322 and codex-cli 0.167.0, 2026-11-10 (the read-only Claude flags
- * and both Codex forms with `--` were also run with a trivial prompt in an empty directory).
+ * and both Codex forms with `--` were also run with a trivial prompt in an empty directory). The
+ * isolated write flags were run on 2026-11-11 against a project whose hook and MCP server touch a
+ * marker file: the marker appeared without them and not with them.
  */
 class CliCommandTest {
     private static final Path ROOT = Path.of("/project");
@@ -40,6 +42,13 @@ class CliCommandTest {
     void claudeWriteStartsFreshInAutoMode() {
         assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                 "--permission-mode", "auto"), ClaudeCliAgent.arguments("s1", AgentAccess.WRITE, null));
+    }
+
+    @Test
+    void claudeIsolatedWriteLoadsOnlyTheUserSettings() {
+        assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--permission-mode", "auto", "--setting-sources", "user"),
+                ClaudeCliAgent.arguments("s1", AgentAccess.WRITE_ISOLATED, null));
     }
 
     @Test
@@ -94,6 +103,20 @@ class CliCommandTest {
     void codexWriteStartsFreshInWorkspaceWrite() {
         assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write", "--cd", "/project", "--", "-"),
                 CodexCliAgent.arguments(ROOT, "s1", AgentAccess.WRITE, List.of()));
+    }
+
+    @Test
+    void codexIsolatedWriteMarksTheProjectUntrustedForTheTurn() {
+        assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write",
+                "-c", "projects={\"/project\"={trust_level=\"untrusted\"}}", "-c", "approval_policy=\"on-request\"",
+                "--cd", "/project", "--", "-"),
+                CodexCliAgent.arguments(ROOT, "s1", AgentAccess.WRITE_ISOLATED, List.of("idea")));
+    }
+
+    @Test
+    void tomlStringEscapesAnyPath() {
+        assertEquals("\"/a b/c\"", CodexCliAgent.tomlString("/a b/c"));
+        assertEquals("\"/a\\\"b\\\\c\\u000A\"", CodexCliAgent.tomlString("/a\"b\\c\n"));
     }
 
     @Test

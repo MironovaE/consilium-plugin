@@ -74,7 +74,21 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
                     command.add(resumable);
                 }
             }
-            case WRITE, WRITE_ISOLATED -> addAutoMode(command);
+            case WRITE -> addAutoMode(command);
+            case WRITE_ISOLATED -> {
+                addAutoMode(command);
+                // The trust dialog -p skips is the only gate on project settings, so a copy another
+                // agent wrote into, or a project IntelliJ doesn't trust, would run its own hooks as
+                // the person. "user" loads ~/.claude/settings.json alone: the person's model, env,
+                // sign-in helpers, hooks and plugins all apply as in any write turn, and their user
+                // and local-scope MCP servers stay. The project's .mcp.json is skipped too, even
+                // with enableAllProjectMcpServers set from outside the project (checked 2026-11-11
+                // on Claude Code 2.1.322: a SessionStart hook and an .mcp.json server in the project
+                // both ran without the flag and neither ran with it). --strict-mcp-config isn't
+                // added because it would also drop the person's own servers.
+                command.add("--setting-sources");
+                command.add("user");
+            }
         }
         command.addAll(ClaudeUserSettings.settingsFlag(keptSettings));
         return command;
