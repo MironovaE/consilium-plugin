@@ -890,6 +890,25 @@ class ChatSessionTest {
     }
 
     @Test
+    void mergeAfterAStoppedPartTellsAboutHookSettingsBeforeMerging() {
+        git.changed.put("consilium/codex-1", List.of(".claude/settings.json"));
+        failBothParts();
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
+        int runsBefore = claude().runs.size();
+
+        session.send("merge what's there", TurnMode.AUTO, "");
+
+        assertEquals(runsBefore, claude().runs.size(), "the first merge only tells");
+        assertEquals(ConsiliumBundle.message("notice.merge.agent.settings", "consilium/codex-1", ".claude/settings.json"),
+                notices().getLast());
+
+        classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
+        session.send("looked at it, merge", TurnMode.AUTO, "");
+
+        assertTrue(claude().last().prompt.contains("consilium/codex-1"), "the person's word after the notice merges it");
+    }
+
+    @Test
     void aRecordPointingOutsideConsiliumsFolderIsDropped() {
         store.setPendingWork(List.of(new PendingWork(Speaker.CODEX, "/Users/someone/project", "consilium/codex-1", "0123abcd")));
 
@@ -907,7 +926,7 @@ class ChatSessionTest {
         codex().last().answer("layout done", "x1");
 
         assertEquals(1, claude().runs.size(), "no automatic merge");
-        assertEquals(ConsiliumBundle.message("notice.merge.hooks", "consilium/codex-1"), notices().getLast());
+        assertEquals(ConsiliumBundle.message("notice.merge.hooks", "consilium/codex-1", ".husky/pre-commit"), notices().getLast());
 
         classifier.next = new Intent(Intent.Kind.INTEGRATE, Set.of(Speaker.CLAUDE));
         session.send("looked at it, merge", TurnMode.AUTO, "");

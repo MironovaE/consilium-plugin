@@ -90,7 +90,6 @@ class ParallelWorkTest {
         assertEquals(part.branch, held.getFirst().part().branch);
         assertEquals(ParallelWork.Review.HOOKS, held.getFirst().reason());
         assertEquals("tools/git-hooks/pre-push", held.getFirst().path());
-        assertEquals(List.of(part.branch), work.touchingHooks(repo, List.of(part, plain)).stream().map(p -> p.branch).toList());
     }
 
     @Test

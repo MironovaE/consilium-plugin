@@ -163,13 +163,6 @@ final class ParallelWork {
                     + "|package\\.json");
 
     /**
-     * Parts that must not be merged automatically; {@link #needingReview} says why.
-     */
-    List<PendingWork> touchingHooks(Path projectRoot, List<PendingWork> parts) {
-        return needingReview(projectRoot, parts).stream().map(Held::part).toList();
-    }
-
-    /**
      * Parts the person looks at before they are merged, in the order given, each with the first
      * reason found. Merging runs the project's hooks outside any sandbox, and later turns run what the
      * agent settings say, so a part that changes either waits; so does a part with another repository

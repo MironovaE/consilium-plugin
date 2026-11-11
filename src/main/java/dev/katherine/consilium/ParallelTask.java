@@ -9,8 +9,10 @@ import dev.katherine.consilium.work.Worktree;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
@@ -44,11 +46,11 @@ final class ParallelTask {
     }
 
     /** What committing the finished parts found, in the order the merge checks it. */
-    private record Committed(List<Speaker> idle, List<PendingWork> touchingHooks, boolean projectDirty) {
+    private record Committed(List<ParallelWork.Held> held, List<Speaker> idle, boolean projectDirty) {
     }
 
     /** The parts that hold work, ready for "merge", and whether the project is clean enough for it. */
-    private record Mergeable(List<PendingWork> present, List<PendingWork> withWork, boolean projectDirty) {
+    private record Mergeable(List<PendingWork> present, List<PendingWork> withWork, List<ParallelWork.Held> held, boolean projectDirty) {
     }
 
     private final ConsiliumStateStore store;
@@ -61,6 +63,9 @@ final class ParallelTask {
     private List<PendingWork> partsInFlight;
     private final Map<Speaker, MessageStatus> partOutcomes = new EnumMap<>(Speaker.class);
     private final Map<Speaker, String> partReports = new EnumMap<>(Speaker.class);
+    // Branches the person was told need a look before merging; their next "merge" is the go-ahead.
+    // Kept in memory only: after a restart the person is told once more, which errs on the safe side.
+    private final Set<String> reviewAnnounced = new HashSet<>();
 
     ParallelTask(ConsiliumStateStore store, ParallelWork parallelWork, Path projectRoot, Steps steps, Executor background, Host host) {
         this.store = store;
@@ -171,17 +176,19 @@ final class ParallelTask {
         }
         steps.run(() -> {
             parallelWork.commitParts(parts, reports);
-            List<Speaker> idle = parallelWork.withoutCommits(projectRoot, parts);
-            List<PendingWork> hooks = idle.isEmpty() ? parallelWork.touchingHooks(projectRoot, parts) : List.of();
-            boolean dirty = idle.isEmpty() && hooks.isEmpty() && parallelWork.projectIsDirty(projectRoot);
-            return new Committed(idle, hooks, dirty);
+            // Checked before the commits are counted: a part holding another repository is never
+            // committed, and "no commits" would hide why.
+            List<ParallelWork.Held> held = parallelWork.needingReview(projectRoot, parts);
+            List<Speaker> idle = held.isEmpty() ? parallelWork.withoutCommits(projectRoot, parts) : List.of();
+            boolean dirty = held.isEmpty() && idle.isEmpty() && parallelWork.projectIsDirty(projectRoot);
+            return new Committed(held, idle, dirty);
         }, committed -> {
-            if (!committed.idle().isEmpty()) {
+            if (!committed.held().isEmpty()) {
+                // Merging would run hooks or settings the agents changed, outside any sandbox: the person looks first.
+                announceReview(committed.held());
+            } else if (!committed.idle().isEmpty()) {
                 String who = committed.idle().stream().map(Speaker::label).collect(Collectors.joining(", "));
                 host.notice(ConsiliumBundle.message("notice.parallel.no.commits", who, branches(parts)));
-            } else if (!committed.touchingHooks().isEmpty()) {
-                // Merging would run hooks the agents changed, outside any sandbox: the person looks first.
-                host.notice(ConsiliumBundle.message("notice.merge.hooks", branches(committed.touchingHooks())));
             } else if (committed.projectDirty()) {
                 host.notice(ConsiliumBundle.message("notice.merge.dirty", branches(parts)));
             } else {
@@ -201,18 +208,43 @@ final class ParallelTask {
             parallelWork.commitParts(present, Map.of());
             List<Speaker> idle = parallelWork.withoutCommits(projectRoot, present);
             List<PendingWork> withWork = present.stream().filter(part -> !idle.contains(part.agentValue())).toList();
+            List<ParallelWork.Held> held = parallelWork.needingReview(projectRoot, withWork);
             boolean dirty = !withWork.isEmpty() && parallelWork.projectIsDirty(projectRoot);
-            return new Mergeable(present, withWork, dirty);
+            return new Mergeable(present, withWork, held, dirty);
         }, mergeable -> {
             store.setPendingWork(mergeable.present());
+            // "Merge" is the person's go-ahead only for what they were told about: a stopped part
+            // never went through the check after the parts finished, so it is told here first.
+            List<ParallelWork.Held> untold = mergeable.held().stream()
+                    .filter(held -> !reviewAnnounced.contains(held.part().branch))
+                    .toList();
             if (mergeable.withWork().isEmpty()) {
                 host.notice(ConsiliumBundle.message("notice.merge.nothing"));
+            } else if (!untold.isEmpty()) {
+                announceReview(untold);
             } else if (mergeable.projectDirty()) {
                 host.notice(ConsiliumBundle.message("notice.merge.dirty", branches(mergeable.withWork())));
             } else {
                 startMerge(integrator, mergeable.withWork());
             }
         });
+    }
+
+    private void announceReview(List<ParallelWork.Held> held) {
+        for (ParallelWork.Held part : held) {
+            reviewAnnounced.add(part.part().branch);
+            host.notice(reviewNotice(part));
+        }
+    }
+
+    static String reviewNotice(ParallelWork.Held held) {
+        String branch = held.part().branch;
+        return switch (held.reason()) {
+            case HOOKS -> ConsiliumBundle.message("notice.merge.hooks", branch, held.path());
+            case AGENT_SETTINGS -> ConsiliumBundle.message("notice.merge.agent.settings", branch, held.path());
+            case NESTED_REPOSITORY -> ConsiliumBundle.message("notice.merge.nested", branch, held.path());
+            case UNCHECKED -> ConsiliumBundle.message("notice.merge.unchecked", branch);
+        };
     }
 
     private void startMerge(Speaker integrator, List<PendingWork> parts) {
