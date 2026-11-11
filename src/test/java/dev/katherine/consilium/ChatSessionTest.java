@@ -718,6 +718,21 @@ class ChatSessionTest {
     }
 
     @Test
+    void partsWhereNobodyChangedAnythingAreRemoved() {
+        git.commits.put("consilium/claude-1", List.of());
+        git.commits.put("consilium/codex-1", List.of());
+        classifier.next = new Intent(Intent.Kind.WORK, Set.of(Speaker.CLAUDE, Speaker.CODEX));
+        session.send("go ahead", TurnMode.AUTO, "");
+        claude().last().answer("it's a question, so I changed nothing", "c1");
+        codex().last().answer("there was no split, so I changed nothing", "x1");
+
+        assertEquals(1, claude().runs.size(), "nothing merged");
+        assertEquals(2, git.removed.size(), "the empty copies are removed");
+        assertTrue(store.pendingWork().isEmpty(), "nothing is left waiting for a merge");
+        assertTrue(notices().getLast().startsWith("Neither agent"), notices().toString());
+    }
+
+    @Test
     void stopWhileReadingTheMessageStartsNothing() {
         classifier.hold = true;
         session.send("go ahead", TurnMode.AUTO, "");

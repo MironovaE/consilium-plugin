@@ -186,6 +186,11 @@ final class ParallelTask {
             if (!committed.held().isEmpty()) {
                 // Merging would run hooks or settings the agents changed, outside any sandbox: the person looks first.
                 announceReview(committed.held());
+            } else if (committed.idle().size() == parts.size()) {
+                // Nobody changed anything (a question taken for a task): empty branches would only
+                // be clutter the person has to delete by hand. Their tips are the base commit, so
+                // removal deletes no work.
+                discardIdle(parts);
             } else if (!committed.idle().isEmpty()) {
                 String who = committed.idle().stream().map(Speaker::label).collect(Collectors.joining(", "));
                 host.notice(ConsiliumBundle.message("notice.parallel.no.commits", who, branches(parts)));
@@ -270,6 +275,15 @@ final class ParallelTask {
             // What is on disk is recorded even after Stop: the copies are gone either way.
             store.setPendingWork(kept);
         });
+    }
+
+    private void discardIdle(List<PendingWork> parts) {
+        steps.run(() -> parallelWork.cleanUp(projectRoot, parts), kept -> {
+            store.setPendingWork(kept);
+            host.notice(kept.isEmpty()
+                    ? ConsiliumBundle.message("notice.parallel.nothing.done")
+                    : ConsiliumBundle.message("notice.merge.kept", branches(kept)));
+        }, store::setPendingWork);
     }
 
     private void discardInBackground(List<PendingWork> parts) {
