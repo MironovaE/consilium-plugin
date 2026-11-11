@@ -124,12 +124,23 @@ class ConsiliumStateStoreTest {
                 new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "main", "0123abcd"),
                 new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "consilium/codex-1", "--output=/tmp/x"),
                 new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "relative/path", "consilium/codex-1", "0123abcd"),
-                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "consilium/../main", "0123abcd")));
+                new dev.katherine.consilium.model.PendingWork(Speaker.CODEX, "/wt/codex", "consilium/../main", "0123abcd"),
+                new dev.katherine.consilium.model.PendingWork(Speaker.USER, "/wt/user", "consilium/user-1", "0123abcd")));
 
         ConsiliumStateStore reopened = new ConsiliumStateStore(persistence);
 
         assertEquals(1, reopened.pendingWork().size());
         assertEquals("consilium/claude-1", reopened.pendingWork().getFirst().branch);
+    }
+
+    @Test
+    void pendingWorkOfAnUnknownAgentIsDroppedOnLoading() {
+        MemoryPersistence persistence = new MemoryPersistence();
+        persistence.value = "{\"pendingWork\":[{\"agent\":\"GEMINI\",\"path\":\"/wt/gemini\","
+                + "\"branch\":\"consilium/gemini-1\",\"baseCommit\":\"0123abcd\"},{\"path\":\"/wt/none\","
+                + "\"branch\":\"consilium/none-1\",\"baseCommit\":\"0123abcd\"}]}";
+
+        assertTrue(new ConsiliumStateStore(persistence).pendingWork().isEmpty());
     }
 
     private static String stateWith(String messagesJson) {

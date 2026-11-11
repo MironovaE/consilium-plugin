@@ -21,11 +21,18 @@ public final class PendingWork {
         this.baseCommit = baseCommit;
     }
 
+    /** True when the agent is one that can do a part: Claude or Codex. */
+    public boolean hasKnownAgent() {
+        return Speaker.CLAUDE.name().equals(agent) || Speaker.CODEX.name().equals(agent);
+    }
+
+    /**
+     * Valid only for a record with a {@linkplain #hasKnownAgent() known agent}; records are checked
+     * when they are loaded. Mapping an unknown name to some agent would hand that agent's branch
+     * and report to the wrong one.
+     */
     public Speaker agentValue() {
-        try {
-            return Speaker.valueOf(agent);
-        } catch (IllegalArgumentException | NullPointerException ignored) {
-            return Speaker.CLAUDE;
-        }
+        if (!hasKnownAgent()) throw new IllegalStateException("Not an agent of a parallel part: " + agent);
+        return Speaker.valueOf(agent);
     }
 }

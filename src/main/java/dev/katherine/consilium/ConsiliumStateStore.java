@@ -186,7 +186,7 @@ final class ConsiliumStateStore {
     private static final java.util.regex.Pattern COMMIT = java.util.regex.Pattern.compile("[0-9a-f]{7,64}");
 
     static boolean isOwnWork(PendingWork work) {
-        if (work == null || work.path == null || work.branch == null || work.baseCommit == null) return false;
+        if (work == null || !work.hasKnownAgent() || work.path == null || work.branch == null || work.baseCommit == null) return false;
         if (!OWN_BRANCH.matcher(work.branch).matches() || work.branch.contains("..")) return false;
         if (!COMMIT.matcher(work.baseCommit).matches()) return false;
         try {
