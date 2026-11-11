@@ -406,6 +406,7 @@ final class ChatSession {
      * Closing the project stops the agents. An answer that had already finished is stored as its
      * completion would have stored it: that completion is queued for the UI thread and is dropped
      * once the session is closed. An unfinished one keeps its partial text, as a manual Stop does.
+     * Then the state is written out: saves are written behind, and the IDE may exit next.
      */
     void dispose() {
         if (disposed) return;
@@ -424,6 +425,7 @@ final class ChatSession {
             }
         }
         runs.clear();
+        store.flush();
     }
 
     // Helpers

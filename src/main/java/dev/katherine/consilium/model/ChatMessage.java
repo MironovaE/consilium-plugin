@@ -1,8 +1,9 @@
 package dev.katherine.consilium.model;
 
+import java.util.Arrays;
 import java.util.List;
 
-/** One transcript entry. Public mutable fields keep it a plain Gson record in workspace.xml. */
+/** One transcript entry. Public mutable fields keep it a plain Gson record in the state file. */
 public final class ChatMessage {
     // Before 0.3.2 a stopped answer was stored with this mark appended, and an error was stored as
     // an ordinary answer with this prefix. Both languages, because the IDE locale may have changed
@@ -11,6 +12,8 @@ public final class ChatMessage {
             "[stopped before the answer finished]", "[остановлено до конца ответа]");
     private static final List<String> LEGACY_ERROR_PREFIXES = List.of(
             "Couldn't answer: ", "Не получилось ответить: ");
+    // Transcripts before 0.3.0 stored the human under this name, which is today's USER.
+    private static final String LEGACY_USER = "KATHERINE";
 
     public String id;
     public String speaker;
@@ -31,24 +34,24 @@ public final class ChatMessage {
         this.status = status.name();
     }
 
-    public Speaker speakerValue() {
-        try {
-            return Speaker.valueOf(speaker);
-        } catch (IllegalArgumentException | NullPointerException ignored) {
-            // Transcripts before 0.3.0 stored the human as KATHERINE, which is today's USER.
-            return Speaker.USER;
-        }
+    /**
+     * True for the shapes Consilium writes, past versions included. Anything else came from
+     * somewhere else and is dropped on load: an unknown speaker must never pass for the person.
+     */
+    public boolean isWellFormed() {
+        boolean knownSpeaker = LEGACY_USER.equals(speaker) || isNameOf(Speaker.values(), speaker);
+        boolean knownStatus = status == null || isNameOf(MessageStatus.values(), status);
+        return text != null && knownSpeaker && knownStatus;
     }
 
+    /** Valid for a {@linkplain #isWellFormed() well-formed} message. */
+    public Speaker speakerValue() {
+        return LEGACY_USER.equals(speaker) ? Speaker.USER : Speaker.valueOf(speaker);
+    }
+
+    /** Valid for a {@linkplain #isWellFormed() well-formed} message; absent means an answer. */
     public MessageStatus statusValue() {
-        if (status != null) {
-            try {
-                return MessageStatus.valueOf(status);
-            } catch (IllegalArgumentException ignored) {
-                return MessageStatus.ANSWER;
-            }
-        }
-        return MessageStatus.ANSWER;
+        return status == null ? MessageStatus.ANSWER : MessageStatus.valueOf(status);
     }
 
     public String textValue() {
@@ -77,5 +80,9 @@ public final class ChatMessage {
             }
         }
         status = MessageStatus.ANSWER.name();
+    }
+
+    private static boolean isNameOf(Enum<?>[] values, String name) {
+        return Arrays.stream(values).anyMatch(value -> value.name().equals(name));
     }
 }

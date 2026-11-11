@@ -1,8 +1,10 @@
 package dev.katherine.consilium;
 
 import com.google.gson.Gson;
+import com.intellij.ide.trustedProjects.TrustedProjects;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.project.Project;
+import com.intellij.util.concurrency.AppExecutorUtil;
 import dev.katherine.consilium.model.AgentSession;
 import dev.katherine.consilium.model.ChatMessage;
 import dev.katherine.consilium.model.ConsiliumSnapshot;
@@ -15,27 +17,65 @@ import java.util.List;
 import java.util.UUID;
 
 final class ConsiliumStateStore {
-    private static final String KEY = "dev.katherine.consilium.state.v1";
-    // The whole transcript is serialized into the project's workspace.xml, which the IDE reads on
-    // every open. It is trimmed by count on load and between turns (compact), never during one,
-    // so that the seenThrough and snapshot indices of turns in flight don't shift.
+    // Where 0.4.0 and earlier kept the state: the project's workspace.xml.
+    private static final String LEGACY_KEY = "dev.katherine.consilium.state.v1";
+    // The whole transcript is serialized on every change and read on every open. It is trimmed by
+    // count on load and between turns (compact), never during one, so that the seenThrough and
+    // snapshot indices of turns in flight don't shift.
     static final int MAX_STORED_MESSAGES = 300;
+    // Generous for an agent's answer; a longer text is cut on load rather than kept whole.
+    static final int MAX_MESSAGE_LENGTH = 200_000;
+    // Anything larger isn't a state Consilium wrote: it opens empty instead of filling the heap.
+    private static final int MAX_STATE_LENGTH = 64 * 1024 * 1024;
 
-    /** Where the serialized transcript lives; the project's PropertiesComponent in the IDE. */
+    /** Where the serialized state lives; a {@link StateFile} in the IDE. */
     interface Persistence {
         String load();
 
+        /** May write later; {@link #flush()} makes sure it's written. */
         void save(String value);
 
         void erase();
+
+        /** Writes what {@link #save} left pending, before returning. */
+        default void flush() {
+        }
     }
 
     private final Persistence persistence;
     private final Gson gson = new Gson();
     private ConsiliumSnapshot state;
 
-    ConsiliumStateStore(Project project) {
-        this(propertiesOf(PropertiesComponent.getInstance(project)));
+    /** The project's store in the IDE, with the state brought over from workspace.xml if it is still there. */
+    static ConsiliumStateStore open(Project project) {
+        StateFile file = new StateFile(StateFile.locationOf(project),
+                AppExecutorUtil.createBoundedApplicationPoolExecutor("Consilium state", 1));
+        PropertiesComponent workspace = PropertiesComponent.getInstance(project);
+        String legacy = workspace.getValue(LEGACY_KEY);
+        if (legacy != null && migrateLegacy(legacy, file, TrustedProjects.isProjectTrusted(project))) {
+            workspace.unsetValue(LEGACY_KEY);
+        }
+        return new ConsiliumStateStore(file);
+    }
+
+    /**
+     * Brings the state kept in workspace.xml by 0.4.0 and earlier over to {@code target}, once.
+     *
+     * @return whether the old entry is done with and should be removed
+     */
+    static boolean migrateLegacy(String legacy, Persistence target, boolean projectTrusted) {
+        // workspace.xml lies in the project tree, so a cloned repository can ship one with "user"
+        // messages the agents would obey. Only a project the person trusts brings its transcript
+        // along; an untrusted one's entry stays where it is, unread, so trusting the project later
+        // still brings it over.
+        if (!projectTrusted) return false;
+        // A state already in the new place is newer than anything workspace.xml holds.
+        String current = target.load();
+        if (current == null || current.isBlank()) {
+            target.save(legacy);
+            target.flush();
+        }
+        return true;
     }
 
     ConsiliumStateStore(Persistence persistence) {
@@ -101,6 +141,11 @@ final class ConsiliumStateStore {
         persistence.erase();
     }
 
+    /** Writes the state out now; for closing the project. */
+    synchronized void flush() {
+        persistence.flush();
+    }
+
     private AgentSession sessionOf(Speaker speaker) {
         return switch (speaker) {
             case CLAUDE -> state.claude;
@@ -111,20 +156,24 @@ final class ConsiliumStateStore {
 
     private ConsiliumSnapshot read() {
         String raw = persistence.load();
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.isBlank() || raw.length() > MAX_STATE_LENGTH) {
             return new ConsiliumSnapshot();
         }
         try {
             ConsiliumSnapshot parsed = gson.fromJson(raw, ConsiliumSnapshot.class);
             if (parsed == null) return new ConsiliumSnapshot();
             if (parsed.messages == null) parsed.messages = new ArrayList<>();
-            parsed.messages.removeIf(message -> message == null);
-            parsed.messages.forEach(ChatMessage::upgradeLegacyStatus);
-            if (parsed.claude == null) parsed.claude = new AgentSession(null, 0);
-            if (parsed.codex == null) parsed.codex = new AgentSession(null, 0);
+            // Only the shapes Consilium writes pass: an unknown speaker must not become the person.
+            parsed.messages.removeIf(message -> message == null || !message.isWellFormed());
+            for (ChatMessage message : parsed.messages) {
+                message.upgradeLegacyStatus();
+                if (message.text.length() > MAX_MESSAGE_LENGTH) message.text = message.text.substring(0, MAX_MESSAGE_LENGTH);
+            }
+            if (parsed.claude == null || parsed.claude.seenThrough < 0) parsed.claude = new AgentSession(null, 0);
+            if (parsed.codex == null || parsed.codex.seenThrough < 0) parsed.codex = new AgentSession(null, 0);
             if (parsed.pendingWork == null) parsed.pendingWork = new ArrayList<>();
-            // workspace.xml can be edited by anyone who commits to the project; these values reach git
-            // arguments and a write turn's prompt, so only the shapes Consilium itself creates pass.
+            // These values reach git arguments and a write turn's prompt, and a state brought over
+            // from workspace.xml came from the project tree: only the shapes Consilium creates pass.
             parsed.pendingWork.removeIf(work -> !isOwnWork(work));
             return trimmed(parsed, MAX_STORED_MESSAGES);
         } catch (RuntimeException ignored) {
@@ -158,24 +207,5 @@ final class ConsiliumStateStore {
 
     private void save() {
         persistence.save(gson.toJson(state));
-    }
-
-    private static Persistence propertiesOf(PropertiesComponent properties) {
-        return new Persistence() {
-            @Override
-            public String load() {
-                return properties.getValue(KEY);
-            }
-
-            @Override
-            public void save(String value) {
-                properties.setValue(KEY, value);
-            }
-
-            @Override
-            public void erase() {
-                properties.unsetValue(KEY);
-            }
-        };
     }
 }

@@ -68,7 +68,7 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
         // Without a base path (the default project) agents would run in the IDE's own working
         // directory, which may be "/". Such a panel stays read-only and says why.
         Path rootPath = hasProjectRoot ? Path.of(basePath) : Path.of(System.getProperty("user.home"));
-        session = new ChatSession(new ConsiliumStateStore(project), ConsiliumPanel::agentFor, new ClaudeIntentClassifier(),
+        session = new ChatSession(ConsiliumStateStore.open(project), ConsiliumPanel::agentFor, new ClaudeIntentClassifier(),
                 new ParallelWork(new GitCliWorktrees()), rootPath, () -> TrustedProjects.isProjectTrusted(project),
                 this::onUi, AppExecutorUtil.getAppExecutorService(), this);
 

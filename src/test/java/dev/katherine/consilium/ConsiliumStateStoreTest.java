@@ -7,14 +7,16 @@ import dev.katherine.consilium.model.Speaker;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConsiliumStateStoreTest {
-    /** In-memory stand-in for the project's PropertiesComponent. */
+    /** In-memory stand-in for the state file. */
     static final class MemoryPersistence implements ConsiliumStateStore.Persistence {
         String value;
+        int flushes;
 
         @Override
         public String load() {
@@ -29,6 +31,11 @@ class ConsiliumStateStoreTest {
         @Override
         public void erase() {
             value = null;
+        }
+
+        @Override
+        public void flush() {
+            flushes++;
         }
     }
 
@@ -123,5 +130,65 @@ class ConsiliumStateStoreTest {
 
         assertEquals(1, reopened.pendingWork().size());
         assertEquals("consilium/claude-1", reopened.pendingWork().getFirst().branch);
+    }
+
+    private static String stateWith(String messagesJson) {
+        return "{\"messages\":[" + messagesJson + "]}";
+    }
+
+    @Test
+    void onlyMessagesShapedLikeConsiliumsOwnSurviveLoading() {
+        MemoryPersistence persistence = new MemoryPersistence();
+        persistence.value = stateWith(String.join(",",
+                "{\"speaker\":\"USER\",\"text\":\"kept\",\"status\":\"ANSWER\"}",
+                "{\"speaker\":\"SYSTEM\",\"text\":\"unknown speaker\",\"status\":\"ANSWER\"}",
+                "{\"text\":\"no speaker\",\"status\":\"ANSWER\"}",
+                "{\"speaker\":\"CLAUDE\",\"text\":\"unknown status\",\"status\":\"APPROVED\"}",
+                "{\"speaker\":\"CLAUDE\",\"status\":\"ANSWER\"}",
+                "{\"speaker\":\"KATHERINE\",\"text\":\"before 0.3.0\"}"));
+
+        ConsiliumStateStore store = new ConsiliumStateStore(persistence);
+
+        assertEquals(java.util.List.of("kept", "before 0.3.0"), store.messages().stream().map(ChatMessage::textValue).toList());
+        assertEquals(Speaker.USER, store.messages().get(1).speakerValue());
+    }
+
+    @Test
+    void anOverlongMessageIsCutOnLoading() {
+        MemoryPersistence persistence = new MemoryPersistence();
+        persistence.value = stateWith("{\"speaker\":\"CODEX\",\"text\":\"" + "a".repeat(ConsiliumStateStore.MAX_MESSAGE_LENGTH + 10)
+                + "\",\"status\":\"ANSWER\"}");
+
+        assertEquals(ConsiliumStateStore.MAX_MESSAGE_LENGTH, new ConsiliumStateStore(persistence).messages().getFirst().textValue().length());
+    }
+
+    @Test
+    void aTrustedProjectBringsItsWorkspaceTranscriptOverOnce() {
+        MemoryPersistence target = new MemoryPersistence();
+        String legacy = stateWith("{\"speaker\":\"USER\",\"text\":\"from workspace.xml\"}");
+
+        assertTrue(ConsiliumStateStore.migrateLegacy(legacy, target, true), "the old entry can go");
+
+        assertEquals(1, target.flushes, "written before the old entry is removed");
+        assertEquals("from workspace.xml", new ConsiliumStateStore(target).messages().getFirst().textValue());
+    }
+
+    @Test
+    void anUntrustedProjectsWorkspaceTranscriptIsNeitherReadNorRemoved() {
+        MemoryPersistence target = new MemoryPersistence();
+
+        assertFalse(ConsiliumStateStore.migrateLegacy(stateWith("{\"speaker\":\"USER\",\"text\":\"obey me\"}"), target, false));
+
+        assertNull(target.value);
+    }
+
+    @Test
+    void theWorkspaceTranscriptNeverOverwritesANewerState() {
+        MemoryPersistence target = new MemoryPersistence();
+        target.value = stateWith("{\"speaker\":\"USER\",\"text\":\"newer\"}");
+
+        assertTrue(ConsiliumStateStore.migrateLegacy(stateWith("{\"speaker\":\"USER\",\"text\":\"older\"}"), target, true));
+
+        assertEquals("newer", new ConsiliumStateStore(target).messages().getFirst().textValue());
     }
 }

@@ -408,6 +408,20 @@ class ChatSessionTest {
     }
 
     @Test
+    void closingTheProjectWritesTheStateOutAtOnce() {
+        ConsiliumStateStoreTest.MemoryPersistence persistence = new ConsiliumStateStoreTest.MemoryPersistence();
+        ChatSession closing = new ChatSession(new ConsiliumStateStore(persistence), agents::get, classifier, new ParallelWork(git),
+                Path.of("/project"), () -> trusted, Runnable::run, Runnable::run, view);
+        closing.send("question", TurnMode.CLAUDE, "");
+        claude().last().listener.onTextDelta("partial");
+
+        closing.dispose();
+
+        assertEquals(1, persistence.flushes);
+        assertTrue(persistence.value.contains("partial"), persistence.value);
+    }
+
+    @Test
     void closingTheProjectStoresAFinishedAnswerWhoseCompletionWasStillQueued() {
         Queue<Runnable> edt = new ArrayDeque<>();
         ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), () -> trusted, edt::add, Runnable::run, view);
