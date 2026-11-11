@@ -1,6 +1,5 @@
 package dev.katherine.consilium;
 
-import com.intellij.markdown.utils.MarkdownToHtmlConverter;
 import org.intellij.markdown.IElementType;
 import org.intellij.markdown.MarkdownElementTypes;
 import org.intellij.markdown.MarkdownTokenTypes;
@@ -9,7 +8,10 @@ import org.intellij.markdown.ast.ASTUtilKt;
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor;
 import org.intellij.markdown.html.GeneratingProvider;
 import org.intellij.markdown.html.HtmlGenerator;
+import org.intellij.markdown.html.HtmlGeneratorKt;
+import org.intellij.markdown.parser.CancellationToken;
 import org.intellij.markdown.parser.LinkMap;
+import org.intellij.markdown.parser.MarkdownParser;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -42,6 +44,13 @@ import java.util.Set;
  * jsoup ships with the IntelliJ Platform ({@code intellij.libraries.jsoup}), so no HTML parser of
  * our own is needed. The platform's {@code DocMarkdownToHtmlConverter} was checked and doesn't
  * fit: it needs a running IDE and lets {@code <img>} through.
+ *
+ * <p>The parser is JetBrains' {@code org.jetbrains:markdown}, called directly. It ships with the
+ * platform ({@code lib/intellij.libraries.markdown.jar}, on the plugin classpath since 261) and,
+ * as a standalone library, carries no {@code @ApiStatus.Internal} markers; the platform's own
+ * wrapper around it, {@code com.intellij.markdown.utils.MarkdownToHtmlConverter}, is internal and
+ * may change in any update (checked 2026-11-11). Bundling our own copy instead would put a second
+ * {@code org.intellij.markdown} next to the platform's, so the shared copy is used.
  */
 final class MarkdownText {
     private MarkdownText() {
@@ -50,7 +59,7 @@ final class MarkdownText {
     /** Link schemes that open on click; anything else renders as plain text. */
     static final Set<String> LINK_PROTOCOLS = Set.of("http", "https", "mailto");
 
-    private static final MarkdownToHtmlConverter CONVERTER = new MarkdownToHtmlConverter(new TextOnlyRawHtmlFlavour());
+    private static final TextOnlyRawHtmlFlavour FLAVOUR = new TextOnlyRawHtmlFlavour();
 
     private static final Safelist SAFELIST = new Safelist()
             .addTags("p", "br", "strong", "b", "em", "i", "code", "pre", "ul", "ol", "li", "blockquote",
@@ -64,7 +73,21 @@ final class MarkdownText {
             .addAttributes("td", "align");
 
     static String toHtml(String markdown) {
-        return sanitize(CONVERTER.convertMarkdownToHtml(markdown == null ? "" : markdown, null));
+        return sanitize(render(markdown == null ? "" : markdown));
+    }
+
+    /**
+     * Parses and generates HTML the way the platform's converter did: assertions on, no base URI,
+     * no source positions in the output.
+     */
+    // buildMarkdownTreeFromString(String) is deprecated in 262 in favour of a CharSequence
+    // overload that 261 doesn't have; the String one is the only call that links on both.
+    @SuppressWarnings("deprecation")
+    private static String render(String markdown) {
+        ASTNode tree = new MarkdownParser(FLAVOUR, true, CancellationToken.NonCancellable.INSTANCE)
+                .buildMarkdownTreeFromString(markdown);
+        return new HtmlGenerator(markdown, tree, FLAVOUR, false)
+                .generateHtml(new HtmlGenerator.DefaultTagRenderer(HtmlGeneratorKt.getDUMMY_ATTRIBUTES_CUSTOMIZER(), false));
     }
 
     /**

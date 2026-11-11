@@ -80,6 +80,25 @@ class MarkdownTextTest {
         assertSafe(html);
     }
 
+    // Reference links resolve only if the generator is handed the document's link map.
+    @Test
+    void referenceLinksResolveThroughTheLinkMap() {
+        String html = MarkdownText.toHtml("см. [доку][docs]\n\n[docs]: https://example.com/ref");
+        assertTrue(html.contains("<a href=\"https://example.com/ref\">доку</a>"), html);
+        assertFalse(html.contains("[docs]"), html);
+        assertSafe(html);
+    }
+
+    @Test
+    void orderedListsKeepTheirStartAndTaskListsTheirText() {
+        String html = MarkdownText.toHtml("3. три\n4. четыре\n\n- [ ] сделать\n- [x] сделано");
+        assertTrue(html.contains("<ol start=\"3\">"), html);
+        assertTrue(html.contains("сделать"), html);
+        assertTrue(html.contains("сделано"), html);
+        assertFalse(html.contains("[x]"), html);
+        assertSafe(html);
+    }
+
     @Test
     void markdownImagesBecomeAltText() {
         String html = MarkdownText.toHtml("Схема: ![diagram](https://example.com/a.png) и ![ref][1]\n\n[1]: https://example.com/b.png");
