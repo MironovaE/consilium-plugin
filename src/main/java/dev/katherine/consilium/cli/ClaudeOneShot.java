@@ -2,6 +2,7 @@ package dev.katherine.consilium.cli;
 
 import com.google.gson.JsonObject;
 import com.intellij.util.concurrency.AppExecutorUtil;
+import dev.katherine.consilium.model.Speaker;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -25,8 +26,6 @@ import java.util.concurrent.TimeoutException;
  * Bedrock/Vertex keep working.
  */
 public final class ClaudeOneShot {
-    private static final String LABEL = "Claude";
-
     private final @Nullable Path executable;
     private final @Nullable Path userSettings;
 
@@ -54,13 +53,13 @@ public final class ClaudeOneShot {
     public Call start(Path workingDirectory, List<String> arguments, String stdin, Duration timeout) {
         CompletableFuture<JsonObject> output = new CompletableFuture<>();
         ResultParser parser = new ResultParser();
-        CliRun run = new CliRun(LABEL, new OutputListener(output, parser), parser);
+        CliRun run = new CliRun(Speaker.CLAUDE.label(), new OutputListener(output, parser), parser);
         TurnFiles files = new TurnFiles();
         run.terminated().whenComplete((ignored, error) -> files.deleteAll());
         Call call = new Call(run, output);
 
         ScheduledFuture<?> timer = AppExecutorUtil.getAppScheduledExecutorService().schedule(
-                () -> call.stop(new TimeoutException(LABEL + " didn't answer within " + timeout)),
+                () -> call.stop(new TimeoutException(Speaker.CLAUDE.label() + " didn't answer within " + timeout)),
                 timeout.toMillis(), TimeUnit.MILLISECONDS);
         output.whenComplete((ignored, error) -> timer.cancel(false));
 
@@ -74,11 +73,7 @@ public final class ClaudeOneShot {
         Map<String, String> environment = CliLauncher.environment();
         Path binary = CliLauncher.binary("claude", executable, workingDirectory, environment);
         List<String> all = new ArrayList<>(arguments);
-        String kept = ClaudeUserSettings.discussionSubset(userSettings);
-        if (kept != null) {
-            all.add("--settings");
-            all.add(files.createPrivate("consilium-claude-settings-", kept).toString());
-        }
+        all.addAll(ClaudeUserSettings.settingsFlag(ClaudeUserSettings.keptSubsetFile(userSettings, files)));
         return CliLauncher.start(binary, all, workingDirectory);
     }
 
@@ -153,7 +148,7 @@ public final class ClaudeOneShot {
             if (structured != null) {
                 output.complete(structured);
             } else {
-                output.completeExceptionally(new IOException(LABEL + " answered without a structured result"));
+                output.completeExceptionally(new IOException(Speaker.CLAUDE.label() + " answered without a structured result"));
             }
         }
 

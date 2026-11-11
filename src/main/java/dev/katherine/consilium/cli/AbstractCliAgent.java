@@ -33,25 +33,27 @@ abstract class AbstractCliAgent implements CliAgent {
         return run;
     }
 
-    /** The CLI arguments after the executable. An unusable {@code sessionId} means a fresh session. */
-    abstract List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access);
-
     abstract CliEventParser newParser();
 
     /**
-     * The arguments for this launch. Runs on the agent's background thread, so an agent may consult
-     * the CLI first (Codex lists its MCP servers); throwing refuses the turn.
+     * The CLI arguments after the executable for one launch. Runs on the agent's background thread,
+     * so an agent may consult the CLI first (Codex lists its MCP servers) or write turn files;
+     * throwing refuses the turn. Each agent builds the list with a pure {@code arguments(...)}
+     * method that {@code CliCommandTest} pins.
      */
-    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
-        return arguments(projectRoot, sessionId, access);
+    abstract List<String> launchArguments(Launch launch) throws IOException;
+
+    /** Everything an agent may need to choose its arguments. An unusable session id means a fresh session. */
+    record Launch(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
+                  Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) {
     }
 
     private Process launch(Path projectRoot, @Nullable String sessionId, AgentAccess access, TurnFiles files,
                            BooleanSupplier cancelled) throws Exception {
         Map<String, String> environment = CliLauncher.environment();
         Path binary = CliLauncher.binary(executableName, executable, projectRoot, environment);
-        return CliLauncher.start(binary, launchArguments(binary, projectRoot, sessionId, access, environment, files, cancelled), projectRoot);
+        List<String> arguments = launchArguments(new Launch(binary, projectRoot, sessionId, access, environment, files, cancelled));
+        return CliLauncher.start(binary, arguments, projectRoot);
     }
 
     /**

@@ -44,6 +44,21 @@ final class ClaudeUserSettings {
         return dir.resolve("settings.json");
     }
 
+    /**
+     * Writes the kept keys to a private turn file for {@code --settings}, or returns null when there
+     * is nothing to keep. A file rather than inline JSON because {@code env} may hold keys and argv
+     * is visible to every local user in {@code ps}.
+     */
+    static @Nullable Path keptSubsetFile(@Nullable Path settingsFile, TurnFiles files) throws IOException {
+        String kept = discussionSubset(settingsFile);
+        return kept != null ? files.createPrivate("consilium-claude-settings-", kept) : null;
+    }
+
+    /** {@code --settings <file>}, or nothing when there is no file. */
+    static List<String> settingsFlag(@Nullable Path keptSubsetFile) {
+        return keptSubsetFile != null ? List.of("--settings", keptSubsetFile.toString()) : List.of();
+    }
+
     /** The kept keys as a JSON object string, or null when there is nothing to keep. */
     static @Nullable String discussionSubset(@Nullable Path settingsFile) {
         if (settingsFile == null || !Files.isRegularFile(settingsFile)) return null;

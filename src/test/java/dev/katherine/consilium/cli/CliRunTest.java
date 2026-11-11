@@ -294,7 +294,7 @@ class CliRunTest {
         List<String> received = Files.readAllLines(args);
         assertFalse(received.contains("--dangerously-bypass-approvals-and-sandbox"), received.toString());
         assertFalse(received.contains("resume"), received.toString());
-        assertEquals(new CodexCliAgent().arguments(project(), null, AgentAccess.READ_ONLY), received);
+        assertEquals(CodexCliAgent.arguments(project(), null, AgentAccess.READ_ONLY, List.of()), received);
     }
 
     @Test
@@ -319,7 +319,7 @@ class CliRunTest {
 
         assertEquals("completed", listener.awaitOutcome());
         awaitTerminated(request);
-        assertEquals(new CodexCliAgent().arguments(project(), "s1", AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")),
+        assertEquals(CodexCliAgent.arguments(project(), "s1", AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")),
                 Files.readAllLines(args));
         // Project config can add servers, so the listing must run where the turn runs.
         assertEquals(project().toRealPath().toString(), Files.readString(dir.resolve("mcp.cwd")).strip());

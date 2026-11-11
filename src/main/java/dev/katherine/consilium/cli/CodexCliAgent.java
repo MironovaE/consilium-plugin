@@ -11,8 +11,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
 
 public final class CodexCliAgent extends AbstractCliAgent {
     private final Duration mcpListTimeout;
@@ -34,27 +32,22 @@ public final class CodexCliAgent extends AbstractCliAgent {
     // MCP servers from the user's (and the project's) Codex config start for every turn and run
     // outside the sandbox, so a read-only turn switches each of them off; see CodexMcpServers.
     @Override
-    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
-        if (access.writes()) return arguments(projectRoot, sessionId, access);
-        List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout, cancelled);
-        return arguments(projectRoot, sessionId, access, servers);
-    }
-
-    @Override
-    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access) {
-        return arguments(projectRoot, sessionId, access, List.of());
+    List<String> launchArguments(Launch launch) throws IOException {
+        List<String> servers = launch.access().writes()
+                ? List.of()
+                : CodexMcpServers.enabled(launch.binary(), launch.projectRoot(), launch.environment(), mcpListTimeout, launch.cancelled());
+        return arguments(launch.projectRoot(), launch.sessionId(), launch.access(), servers);
     }
 
     /**
-     * {@code mcpServersToDisable} only applies to read-only turns.
+     * The arguments after the executable. {@code mcpServersToDisable} only applies to read-only turns.
      *
      * <p>A write turn in a linked worktree gets no access to the repository's {@code .git}: that
      * would let the sandboxed agent write hooks or {@code core.fsmonitor} into {@code .git/config}
      * and run code outside the sandbox at the next git command. So Codex can't commit there, and
      * Consilium commits a parallel part itself (see ParallelWork).
      */
-    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access, List<String> mcpServersToDisable) {
+    static List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access, List<String> mcpServersToDisable) {
         List<String> command = new ArrayList<>();
         command.add("exec");
         String resumable = !access.writes() ? SessionIds.resumable(sessionId) : null;

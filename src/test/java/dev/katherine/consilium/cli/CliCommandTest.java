@@ -28,45 +28,51 @@ class CliCommandTest {
     void claudeReadOnlyResumesWithReadToolsOnly() {
         List<String> expected = new ArrayList<>(CLAUDE_READ_ONLY);
         expected.addAll(List.of("--resume", "s1"));
-        assertEquals(expected, new ClaudeCliAgent(null, null).arguments(ROOT, "s1", AgentAccess.READ_ONLY));
+        assertEquals(expected, ClaudeCliAgent.arguments("s1", AgentAccess.READ_ONLY, null));
     }
 
     @Test
     void claudeReadOnlyStartsFreshWithoutSession() {
-        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent(null, null).arguments(ROOT, null, AgentAccess.READ_ONLY));
+        assertEquals(CLAUDE_READ_ONLY, ClaudeCliAgent.arguments(null, AgentAccess.READ_ONLY, null));
     }
 
     @Test
     void claudeWriteStartsFreshInAutoMode() {
         assertEquals(List.of("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--permission-mode", "auto"), new ClaudeCliAgent(null, null).arguments(ROOT, "s1", AgentAccess.WRITE));
+                "--permission-mode", "auto"), ClaudeCliAgent.arguments("s1", AgentAccess.WRITE, null));
+    }
+
+    @Test
+    void claudeKeptSettingsFileGoesLast() {
+        List<String> expected = new ArrayList<>(CLAUDE_READ_ONLY);
+        expected.addAll(List.of("--settings", "/private/kept.json"));
+        assertEquals(expected, ClaudeCliAgent.arguments(null, AgentAccess.READ_ONLY, Path.of("/private/kept.json")));
     }
 
     @Test
     void codexFreshReadOnlyCannotEscalate() {
         assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
-                "--cd", "/project", "--", "-"), new CodexCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY));
+                "--cd", "/project", "--", "-"), CodexCliAgent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of()));
     }
 
     @Test
     void codexResumeForcesReadOnlySandbox() {
         assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
                 "-c", "approval_policy=\"never\"", "--", "s1", "-"),
-                new CodexCliAgent().arguments(ROOT, "s1", AgentAccess.READ_ONLY));
+                CodexCliAgent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of()));
     }
 
     @Test
     void codexReadOnlySwitchesOffListedMcpServers() {
-        CodexCliAgent agent = new CodexCliAgent();
         assertEquals(List.of("exec", "--json", "--sandbox", "read-only", "-c", "approval_policy=\"never\"",
                 "-c", "mcp_servers.idea.enabled=false", "-c", "mcp_servers.mui-mcp.enabled=false",
                 "--cd", "/project", "--", "-"),
-                agent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")));
+                CodexCliAgent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of("idea", "mui-mcp")));
         assertEquals(List.of("exec", "resume", "--json", "-c", "sandbox_mode=\"read-only\"",
                 "-c", "approval_policy=\"never\"", "-c", "mcp_servers.idea.enabled=false", "--", "s1", "-"),
-                agent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of("idea")));
-        assertEquals(agent.arguments(ROOT, null, AgentAccess.WRITE),
-                agent.arguments(ROOT, null, AgentAccess.WRITE, List.of("idea")));
+                CodexCliAgent.arguments(ROOT, "s1", AgentAccess.READ_ONLY, List.of("idea")));
+        assertEquals(CodexCliAgent.arguments(ROOT, null, AgentAccess.WRITE, List.of()),
+                CodexCliAgent.arguments(ROOT, null, AgentAccess.WRITE, List.of("idea")));
     }
 
     @Test
@@ -87,15 +93,15 @@ class CliCommandTest {
     @Test
     void codexWriteStartsFreshInWorkspaceWrite() {
         assertEquals(List.of("exec", "--json", "--sandbox", "workspace-write", "--cd", "/project", "--", "-"),
-                new CodexCliAgent().arguments(ROOT, "s1", AgentAccess.WRITE));
+                CodexCliAgent.arguments(ROOT, "s1", AgentAccess.WRITE, List.of()));
     }
 
     @Test
     void sessionIdThatLooksLikeAFlagStartsAFreshSession() {
         String hostile = "--dangerously-bypass-approvals-and-sandbox";
-        assertEquals(CLAUDE_READ_ONLY, new ClaudeCliAgent(null, null).arguments(ROOT, hostile, AgentAccess.READ_ONLY));
-        assertEquals(new CodexCliAgent().arguments(ROOT, null, AgentAccess.READ_ONLY),
-                new CodexCliAgent().arguments(ROOT, hostile, AgentAccess.READ_ONLY));
+        assertEquals(CLAUDE_READ_ONLY, ClaudeCliAgent.arguments(hostile, AgentAccess.READ_ONLY, null));
+        assertEquals(CodexCliAgent.arguments(ROOT, null, AgentAccess.READ_ONLY, List.of()),
+                CodexCliAgent.arguments(ROOT, hostile, AgentAccess.READ_ONLY, List.of()));
     }
 
     @Test

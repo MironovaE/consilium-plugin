@@ -11,8 +11,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
 
 public final class ClaudeCliAgent extends AbstractCliAgent {
     private final @Nullable Path userSettings;
@@ -36,51 +34,56 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
         return Speaker.CLAUDE;
     }
 
+    // Only discussion turns need the kept subset: --restricted drops every settings file. A write
+    // turn reads the user's settings file itself, in full (see arguments).
     @Override
-    List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access) {
+    List<String> launchArguments(Launch launch) throws IOException {
+        Path settings = launch.access().writes() ? null : ClaudeUserSettings.keptSubsetFile(userSettings, launch.files());
+        return arguments(launch.sessionId(), launch.access(), settings);
+    }
+
+    /**
+     * The arguments after the executable.
+     *
+     * @param keptSettings the file with the user's kept settings for a discussion turn, or null
+     */
+    static List<String> arguments(@Nullable String sessionId, AgentAccess access, @Nullable Path keptSettings) {
         List<String> command = new ArrayList<>();
         command.add("-p");
         command.add("--output-format");
         command.add("stream-json");
         command.add("--verbose");
         command.add("--include-partial-messages");
-        if (!access.writes()) {
-            command.add("--tools");
-            command.add("Read,Glob,Grep");
-            // -p skips the workspace-trust dialog, so without these a cloned repository's
-            // .claude/settings.json (hooks, allow rules) and .mcp.json would load in a discussion
-            // turn. --restricted ignores user, project and local settings files and confines the
-            // file tools to the project; --strict-mcp-config drops every MCP server we don't pass.
-            command.add("--restricted");
-            command.add("--strict-mcp-config");
-            // Anything that would need approval is denied instead of waiting for a host that
-            // doesn't exist in print mode.
-            command.add("--permission-prompts");
-            command.add("none");
-            String resumable = SessionIds.resumable(sessionId);
-            if (resumable != null) {
-                command.add("--resume");
-                command.add(resumable);
+        switch (access) {
+            case READ_ONLY -> {
+                command.add("--tools");
+                command.add("Read,Glob,Grep");
+                // -p skips the workspace-trust dialog, so without these a cloned repository's
+                // .claude/settings.json (hooks, allow rules) and .mcp.json would load in a discussion
+                // turn. --restricted ignores user, project and local settings files and confines the
+                // file tools to the project; --strict-mcp-config drops every MCP server we don't pass.
+                command.add("--restricted");
+                command.add("--strict-mcp-config");
+                // Anything that would need approval is denied instead of waiting for a host that
+                // doesn't exist in print mode.
+                command.add("--permission-prompts");
+                command.add("none");
+                String resumable = SessionIds.resumable(sessionId);
+                if (resumable != null) {
+                    command.add("--resume");
+                    command.add(resumable);
+                }
             }
-        } else {
-            command.add("--permission-mode");
-            command.add("auto");
+            case WRITE, WRITE_ISOLATED -> addAutoMode(command);
         }
+        command.addAll(ClaudeUserSettings.settingsFlag(keptSettings));
         return command;
     }
 
-    @Override
-    List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
-                                 Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
-        List<String> command = arguments(projectRoot, sessionId, access);
-        if (!access.writes()) {
-            String kept = ClaudeUserSettings.discussionSubset(userSettings);
-            if (kept != null) {
-                command.add("--settings");
-                command.add(files.createPrivate("consilium-claude-settings-", kept).toString());
-            }
-        }
-        return command;
+    // Write turns never resume: each starts a fresh session, so the next discussion sees its report.
+    private static void addAutoMode(List<String> command) {
+        command.add("--permission-mode");
+        command.add("auto");
     }
 
     @Override
