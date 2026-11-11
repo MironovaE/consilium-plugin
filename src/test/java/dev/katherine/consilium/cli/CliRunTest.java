@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -124,6 +125,10 @@ class CliRunTest {
         assertEquals("{\"model\":\"haiku\"}", Files.readString(Path.of(seen + ".json")).strip());
         Path passed = Path.of(Files.readString(Path.of(seen + ".path")).strip());
         assertFalse(Files.exists(passed), "the settings copy is deleted once the turn is over");
+        // Not loose in the shared temp folder, where a sandboxed Codex turn may write.
+        assertEquals(TurnFiles.directory(), passed.getParent());
+        assertTrue(passed.getParent().getFileName().toString().startsWith("consilium-tmp"), passed.toString());
+        assertEquals(PosixFilePermissions.fromString("rwx------"), Files.getPosixFilePermissions(passed.getParent()));
     }
 
     @Test
