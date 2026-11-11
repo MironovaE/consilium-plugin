@@ -5,6 +5,7 @@ import dev.katherine.consilium.cli.ExecutableResolver;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +25,11 @@ public final class TestRepositories {
             assumeTrue(false, "git is not installed");
             throw new AssertionError(exception);
         }
+    }
+
+    /** Worktrees under {@code base}, on the git from the test's PATH rather than the login shell's. */
+    public static GitCliWorktrees worktrees(Path base) {
+        return new GitCliWorktrees(base, Clock.systemDefaultZone(), gitOrSkip());
     }
 
     /**

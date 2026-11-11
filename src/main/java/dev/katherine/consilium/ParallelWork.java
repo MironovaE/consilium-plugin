@@ -5,6 +5,7 @@ import dev.katherine.consilium.model.PendingWork;
 import dev.katherine.consilium.model.Speaker;
 import dev.katherine.consilium.work.GitWorktrees;
 import dev.katherine.consilium.work.Worktree;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -13,6 +14,8 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * The git side of parallel work: a worktree per agent before the turn, a look at what each agent
@@ -24,6 +27,26 @@ final class ParallelWork {
 
     /** Worktrees ready for a parallel turn. */
     record Prepared(boolean uncommittedChangesLeftOut, Map<Speaker, Worktree> worktrees) {
+    }
+
+    /** Why a finished part waits for the person instead of being merged automatically. */
+    enum Review {
+        /** It changes git hooks or a hook runner's config: merging runs hooks in the project. */
+        HOOKS,
+        /** It changes agent settings that run commands (hooks, MCP servers) in later turns. */
+        AGENT_SETTINGS,
+        /** Its copy holds another repository, or the branch adds a submodule. */
+        NESTED_REPOSITORY,
+        /** Consilium couldn't check the part, so it counts as needing a look. */
+        UNCHECKED
+    }
+
+    /**
+     * A part held back for the person.
+     *
+     * @param path the file or folder that caused it, relative to the repository; empty for {@link Review#UNCHECKED}
+     */
+    record Held(PendingWork part, Review reason, String path) {
     }
 
     /** Parallel work can't start; the message says why, in the person's language. */
@@ -122,36 +145,93 @@ final class ParallelWork {
         }
     }
 
+    /** Folders whose files git or a hook runner executes as hooks, at any depth (monorepos nest them). */
+    private static final Set<String> HOOK_DIRECTORIES = Set.of(".husky", ".githooks", ".git-hooks", ".hooks");
+    /** Agent settings folders: Claude Code and Codex read hooks, MCP servers and commands from them. */
+    private static final Set<String> AGENT_DIRECTORIES = Set.of(".claude", ".codex");
     /**
-     * Files that configure git hooks or hook runners. A part that changes one is not merged
-     * automatically: merging runs the project's hooks outside any sandbox, so the person looks first.
+     * Hook runner configs: pre-commit, lefthook (and its local override, in every format it reads),
+     * simple-git-hooks, overcommit, husky v4 ({@code .huskyrc*}, {@code husky.config.js}) and
+     * package.json, where husky v4 and simple-git-hooks can declare hooks too.
      */
-    private static final List<String> HOOK_CONFIG = List.of(
-            ".husky/", ".githooks/", ".git-hooks/", ".hooks/", ".pre-commit-config.yaml", ".pre-commit-hooks.yaml",
-            "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", "lefthook-local.yml",
-            ".lefthook-local.yml", ".simple-git-hooks.json", ".simple-git-hooks.js", ".overcommit.yml");
+    private static final Pattern HOOK_FILE = Pattern.compile(
+            "\\.pre-commit-(config|hooks)\\.ya?ml"
+                    + "|\\.?lefthook(-local)?\\.(ya?ml|jsonc?|toml)"
+                    + "|\\.?simple-git-hooks\\.(json|c?js|mjs)"
+                    + "|\\.overcommit\\.ya?ml"
+                    + "|\\.huskyrc(\\..+)?|husky\\.config\\.c?js"
+                    + "|package\\.json");
 
-    /** Parts that change hook configuration, in the order given; unknown counts as yes. */
+    /**
+     * Parts that must not be merged automatically; {@link #needingReview} says why.
+     */
     List<PendingWork> touchingHooks(Path projectRoot, List<PendingWork> parts) {
+        return needingReview(projectRoot, parts).stream().map(Held::part).toList();
+    }
+
+    /**
+     * Parts the person looks at before they are merged, in the order given, each with the first
+     * reason found. Merging runs the project's hooks outside any sandbox, and later turns run what the
+     * agent settings say, so a part that changes either waits; so does a part with another repository
+     * inside it, whose own config git would obey. Unknown counts as yes.
+     */
+    List<Held> needingReview(Path projectRoot, List<PendingWork> parts) {
         Path repository = repositoryOrNull(projectRoot);
-        if (repository == null) return parts;
-        List<PendingWork> touching = new ArrayList<>();
+        String hooksPath;
+        try {
+            if (repository == null) return unchecked(parts);
+            hooksPath = git.hooksPathInRepository(repository);
+        } catch (IOException exception) {
+            LOG.warn("Couldn't read core.hooksPath", exception);
+            return unchecked(parts);
+        }
+        List<Held> held = new ArrayList<>();
         for (PendingWork part : parts) {
             try {
-                List<String> files = git.changedFiles(repository, worktree(part));
-                boolean hooks = files.stream().anyMatch(file -> HOOK_CONFIG.stream().anyMatch(
-                        config -> config.endsWith("/") ? file.startsWith(config) || file.contains("/" + config)
-                                : file.equals(config) || file.endsWith("/" + config)));
-                // package.json can declare hooks too (husky v4, simple-git-hooks), so it counts.
-                if (hooks || files.stream().anyMatch(file -> file.equals("package.json") || file.endsWith("/package.json"))) {
-                    touching.add(part);
-                }
+                Held reason = review(repository, part, hooksPath);
+                if (reason != null) held.add(reason);
             } catch (IOException exception) {
-                LOG.warn("Couldn't list the files changed on " + part.branch, exception);
-                touching.add(part);
+                LOG.warn("Couldn't check what changed on " + part.branch, exception);
+                held.add(new Held(part, Review.UNCHECKED, ""));
             }
         }
-        return touching;
+        return held;
+    }
+
+    private @Nullable Held review(Path repository, PendingWork part, @Nullable String hooksPath) throws IOException {
+        Worktree worktree = worktree(part);
+        String nested = git.nestedRepository(worktree);
+        if (nested != null) return new Held(part, Review.NESTED_REPOSITORY, nested);
+        List<String> gitlinks = git.changedGitlinks(repository, worktree);
+        if (!gitlinks.isEmpty()) return new Held(part, Review.NESTED_REPOSITORY, gitlinks.getFirst());
+        for (String file : git.changedFiles(repository, worktree)) {
+            Review reason = classify(file, hooksPath);
+            if (reason != null) return new Held(part, reason, file);
+        }
+        return null;
+    }
+
+    /**
+     * Why a changed file needs the person's look, or null if it doesn't.
+     *
+     * @param hooksPath the repository's {@code core.hooksPath} relative to its root, if it lies inside
+     */
+    static @Nullable Review classify(String file, @Nullable String hooksPath) {
+        if (hooksPath != null && (hooksPath.isEmpty() || file.startsWith(hooksPath + "/"))) return Review.HOOKS;
+        String[] segments = file.split("/");
+        String name = segments[segments.length - 1];
+        if (name.equals(".gitmodules")) return Review.NESTED_REPOSITORY;
+        if (name.equals(".mcp.json")) return Review.AGENT_SETTINGS;
+        if (HOOK_FILE.matcher(name).matches()) return Review.HOOKS;
+        for (int i = 0; i < segments.length - 1; i++) {
+            if (HOOK_DIRECTORIES.contains(segments[i])) return Review.HOOKS;
+            if (AGENT_DIRECTORIES.contains(segments[i])) return Review.AGENT_SETTINGS;
+        }
+        return null;
+    }
+
+    private static List<Held> unchecked(List<PendingWork> parts) {
+        return parts.stream().map(part -> new Held(part, Review.UNCHECKED, "")).toList();
     }
 
     /** Agents that committed nothing on their branch, in the order given; unknown counts as nothing. */
