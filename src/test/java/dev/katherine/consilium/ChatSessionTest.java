@@ -407,6 +407,51 @@ class ChatSessionTest {
     }
 
     @Test
+    void closingTheProjectStoresAFinishedAnswerWhoseCompletionWasStillQueued() {
+        Queue<Runnable> edt = new ArrayDeque<>();
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
+        deferred.send("question", TurnMode.CLAUDE, "");
+        claude().last().answer("full answer", "claude-1");
+
+        deferred.dispose();
+        while (!edt.isEmpty()) edt.poll().run();
+
+        assertEquals(2, store.messages().size());
+        assertEquals(MessageStatus.ANSWER, store.messages().get(1).statusValue(), "not cut off");
+        assertEquals("full answer", store.messages().get(1).textValue());
+        assertEquals("claude-1", store.session(Speaker.CLAUDE).sessionId, "the next discussion resumes it");
+        assertEquals(1, store.session(Speaker.CLAUDE).seenThrough);
+    }
+
+    @Test
+    void closingTheProjectKeepsAnErrorWhoseReportWasStillQueued() {
+        Queue<Runnable> edt = new ArrayDeque<>();
+        ChatSession deferred = new ChatSession(store, agents::get, classifier, new ParallelWork(git), Path.of("/project"), edt::add, Runnable::run, view);
+        deferred.send("question", TurnMode.CODEX, "");
+        FakeRun run = codex().last();
+        run.listener.onTextDelta("half");
+        run.listener.onError("codex CLI exited with code 1");
+
+        deferred.dispose();
+        while (!edt.isEmpty()) edt.poll().run();
+
+        assertEquals(2, store.messages().size());
+        assertEquals(MessageStatus.ERROR, store.messages().get(1).statusValue());
+        assertEquals("codex CLI exited with code 1", store.messages().get(1).textValue());
+    }
+
+    @Test
+    void closingTheProjectTwiceStoresThePartialOnce() {
+        session.send("question", TurnMode.CLAUDE, "");
+        claude().last().listener.onTextDelta("partial");
+
+        session.dispose();
+        session.dispose();
+
+        assertEquals(2, store.messages().size());
+    }
+
+    @Test
     void editorContextReachesThePrompt() {
         session.send("look at this", TurnMode.CLAUDE, "File: /project/Main.java");
         assertTrue(claude().last().prompt.contains("<editor-context>\nFile: /project/Main.java"), claude().last().prompt);

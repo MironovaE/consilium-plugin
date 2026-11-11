@@ -91,9 +91,11 @@ final class ChatSession {
         private final StringBuilder text = new StringBuilder();
         private final AtomicBoolean framePending = new AtomicBoolean();
         private volatile String sessionId;
-        // Set on the agent's thread as soon as it reports an outcome, before the UI hears of it:
-        // Stop pressed in between must not turn a finished answer into a cut-off one.
-        private volatile boolean outcomeReported;
+        // Set on the agent's thread as soon as it reports an outcome (ANSWER or ERROR), before the
+        // UI hears of it: Stop or closing the project in between must not turn a finished answer
+        // into a cut-off one. The error detail is written first, so whoever sees ERROR sees it too.
+        private volatile String errorDetail;
+        private volatile MessageStatus reported;
         RunningRequest request;
         boolean settled;
         boolean exited;
@@ -135,13 +137,14 @@ final class ChatSession {
 
         @Override
         public void onCompleted() {
-            outcomeReported = true;
+            reported = MessageStatus.ANSWER;
             onUi(() -> complete(this));
         }
 
         @Override
         public void onError(String message) {
-            outcomeReported = true;
+            errorDetail = message;
+            reported = MessageStatus.ERROR;
             onUi(() -> fail(this, message));
         }
     }
@@ -333,10 +336,10 @@ final class ChatSession {
         // must find its step gone rather than start a discussion the person just stopped.
         if (steps.forgetAll()) classifier.cancel();
         for (Run run : new ArrayList<>(runs.values())) {
-            // cancel() returns only after any callback in flight has finished, so after it
-            // outcomeReported is final: a reported answer is left to its queued completion.
+            // cancel() returns only after any callback in flight has finished, so after it the
+            // reported outcome is final: a reported answer is left to its queued completion.
             if (run.request != null) run.request.cancel();
-            if (run.settled || run.outcomeReported) continue;
+            if (run.settled || run.reported != null) continue;
             recordStopped(run);
             run.view.stopped(run.text().trim());
             // Its processes may already be gone; then nothing else would release the run.
@@ -380,14 +383,26 @@ final class ChatSession {
         return true;
     }
 
-    /** Closing the project stops the agents and keeps partial answers, as a manual Stop does. */
+    /**
+     * Closing the project stops the agents. An answer that had already finished is stored as its
+     * completion would have stored it: that completion is queued for the UI thread and is dropped
+     * once the session is closed. An unfinished one keeps its partial text, as a manual Stop does.
+     */
     void dispose() {
+        if (disposed) return;
         disposed = true;
         classifier.cancel();
         for (Run run : runs.values()) {
+            // As in stop(): after cancel() the reported outcome is final.
             if (run.request != null) run.request.cancel();
             if (run.settled) continue;
-            recordStopped(run);
+            if (run.reported == MessageStatus.ANSWER) {
+                recordAnswer(run);
+            } else if (run.reported == MessageStatus.ERROR) {
+                recordError(run, run.errorDetail);
+            } else {
+                recordStopped(run);
+            }
         }
         runs.clear();
     }
