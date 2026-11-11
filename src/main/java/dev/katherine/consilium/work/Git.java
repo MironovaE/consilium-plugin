@@ -43,6 +43,11 @@ public final class Git {
         return new Git(ExecutableResolver.resolveOnPath("git", EnvironmentUtil.getEnvironmentMap()), timeout);
     }
 
+    /** The same git with another deadline per call, for the rare command that may legitimately run long. */
+    public Git withTimeout(Duration timeout) {
+        return new Git(executable, timeout);
+    }
+
     /** What a finished git process printed; stdout keeps its trailing newline, stderr is stripped. */
     public record Result(int exitCode, String output, String error) {
         public boolean succeeded() {

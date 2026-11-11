@@ -6,10 +6,14 @@ import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.katherine.consilium.cli.ExecutableResolver;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -250,6 +254,185 @@ class GitCliWorktreesTest {
         assertFalse(worktrees.hasUncommittedChanges(repo));
         Files.writeString(repo.resolve("draft.txt"), "x");
         assertTrue(worktrees.hasUncommittedChanges(repo));
+    }
+
+    @Test
+    void ownsTheCopiesItRecordsByTheirRealPath() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+
+        // On macOS the temp directory is behind /var -> /private/var; the record holds the real path.
+        assertTrue(worktrees.owns(worktree.path()));
+    }
+
+    @Test
+    void removingTheLastCopyRemovesTheRepositoryFolder() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree first = worktrees.create(repo, "claude");
+        Worktree second = worktrees.create(repo, "codex");
+        Path parent = first.path().getParent();
+
+        worktrees.remove(repo, first);
+        assertTrue(Files.isDirectory(parent), "the other copy still needs the folder and its record");
+        assertFalse(worktrees.hasUncommittedChanges(second));
+
+        worktrees.remove(repo, second);
+        assertFalse(Files.exists(parent));
+    }
+
+    @Test
+    void commitAllUsesTheRepositorysRecordOfTheCopyNotTheCopysGitFile() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "codex");
+        // The agent points its copy at a repository it made, whose config runs a filter on every file.
+        Path evil = TestRepositories.init(dir.resolve("evil"), true);
+        Path pwned = dir.resolve("pwned");
+        git(evil, "config", "filter.pwn.clean", "sh -c 'echo clean >> \"" + pwned + "\"; cat'");
+        Files.writeString(worktree.path().resolve(".git"), "gitdir: " + evil.resolve(".git") + "\n");
+        Files.writeString(worktree.path().resolve(".gitattributes"), "* filter=pwn\n");
+        Files.writeString(worktree.path().resolve("part.txt"), "work");
+
+        assertTrue(worktrees.commitAll(worktree, "chore(consilium): codex part of a parallel task"));
+
+        assertFalse(Files.exists(pwned), "no filter from the agent's repository ran");
+        assertEquals(1, worktrees.commitsSinceCreated(repo, worktree).size(), "the commit is on the part's own branch");
+        assertEquals(List.of(".gitattributes", "part.txt"), worktrees.changedFiles(repo, worktree));
+        assertEquals("init", git(evil, "log", "-1", "--format=%s"), "the agent's repository got nothing");
+    }
+
+    @Test
+    void commitAllRefusesACopyWithANestedRepository() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "codex");
+        Files.writeString(worktree.path().resolve("part.txt"), "work");
+        TestRepositories.init(Files.createDirectories(worktree.path().resolve("vendor/lib")), true);
+
+        assertEquals("vendor/lib", worktrees.nestedRepository(worktree));
+        assertThrows(NestedRepositoryException.class, () -> worktrees.commitAll(worktree, "part"));
+
+        assertEquals(List.of(), worktrees.commitsSinceCreated(repo, worktree));
+        assertEquals("", git(worktree.path(), "diff", "--cached", "--name-only"), "nothing was staged");
+    }
+
+    @Test
+    void aGitFileCountsAsANestedRepositoryToo() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        assertNull(worktrees.nestedRepository(worktree), "the copy's own .git file is not nested");
+
+        Path module = Files.createDirectories(worktree.path().resolve("modules/a"));
+        Files.writeString(module.resolve(".git"), "gitdir: ../../elsewhere\n");
+
+        assertEquals("modules/a", worktrees.nestedRepository(worktree));
+    }
+
+    @Test
+    void changedGitlinksListsASubmoduleTheBranchAdds() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        Files.writeString(worktree.path().resolve("plain.txt"), "x");
+        git(worktree.path(), "add", "plain.txt");
+        git(worktree.path(), "update-index", "--add", "--cacheinfo", "160000," + worktree.baseCommit() + ",vendor/lib");
+        git(worktree.path(), "commit", "-q", "-m", "add a submodule");
+
+        assertEquals(List.of("vendor/lib"), worktrees.changedGitlinks(repo, worktree));
+        // The folder isn't there, so the copy holds no repository; the branch still records one.
+        assertNull(worktrees.nestedRepository(worktree));
+    }
+
+    @Test
+    void uncommittedChangesNeverLookInsideASubmodule() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        // A checked-out submodule whose own config runs a clean filter, and a file whose timestamp
+        // changed, which a status inside the submodule would rehash through that filter. -c settings
+        // reach the submodule's git too, but a filter driver doesn't need any.
+        Path module = TestRepositories.init(Files.createDirectories(worktree.path().resolve("vendor/lib")), false);
+        Files.writeString(module.resolve(".gitattributes"), "* filter=pwn\n");
+        Files.writeString(module.resolve("a.txt"), "a");
+        git(module, "add", "-A");
+        git(module, "commit", "-q", "-m", "module");
+        git(worktree.path(), "update-index", "--add", "--cacheinfo", "160000," + git(module, "rev-parse", "HEAD") + ",vendor/lib");
+        git(worktree.path(), "commit", "-q", "-m", "add a submodule");
+        Path pwned = dir.resolve("pwned");
+        git(module, "config", "filter.pwn.clean", "sh -c 'echo clean >> \"" + pwned + "\"; cat'");
+        Files.setLastModifiedTime(module.resolve("a.txt"), FileTime.from(Instant.parse("2020-01-01T00:00:00Z")));
+
+        worktrees.hasUncommittedChanges(worktree);
+
+        assertFalse(Files.exists(pwned), "git didn't look inside the submodule");
+    }
+
+    @Test
+    void hooksPathInRepositoryIsRelativeToTheRootOrNull() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        assertNull(worktrees.hooksPathInRepository(repo), "outside the repository (TestRepositories sets /dev/null)");
+
+        git(repo, "config", "--unset", "core.hooksPath");
+        assertNull(worktrees.hooksPathInRepository(repo), "unset");
+
+        git(repo, "config", "core.hooksPath", ".husky");
+        assertEquals(".husky", worktrees.hooksPathInRepository(repo));
+
+        git(repo, "config", "core.hooksPath", repo.resolve("tools/git-hooks").toString());
+        assertEquals("tools/git-hooks", worktrees.hooksPathInRepository(repo));
+
+        git(repo, "config", "core.hooksPath", ".");
+        assertEquals("", worktrees.hooksPathInRepository(repo), "the root itself: any file may be a hook");
+    }
+
+    @Test
+    void aFailedWorktreeAddLeavesNothingBehind() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        // Fails the way a killed add does: its registration still locked as "initializing".
+        GitCliWorktrees failing = new GitCliWorktrees(base, FIXED, gitThat(
+                "for r in '" + repo + "'/.git/worktrees/*; do echo initializing > \"$r/locked\"; done; exit 1"),
+                Duration.ofSeconds(30));
+
+        assertThrows(IOException.class, () -> failing.create(repo, "claude"));
+
+        assertNothingLeft(repo);
+        // A retry gets the first name again: nothing of the failed attempt is in its way.
+        assertEquals("consilium/claude-20261110-083015", worktrees.create(repo, "claude").branch());
+    }
+
+    @Test
+    void aTimedOutWorktreeAddLeavesNothingBehind() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        GitCliWorktrees slow = new GitCliWorktrees(base, FIXED, gitThat("sleep 30"), Duration.ofSeconds(1));
+
+        IOException error = assertThrows(IOException.class, () -> slow.create(repo, "claude"));
+
+        assertTrue(error.getMessage().contains("1 s"), error.getMessage());
+        assertNothingLeft(repo);
+    }
+
+    /** A git that does a real {@code worktree add} and then runs {@code after}, standing in for a failure. */
+    private Git gitThat(String after) throws IOException {
+        Path real = ExecutableResolver.resolveOnPath("git", System.getenv());
+        Path script = dir.resolve("fake-git");
+        Files.writeString(script, "#!/bin/sh\n"
+                + "case \" $* \" in\n"
+                + "  *\" worktree add \"*) \"" + real + "\" \"$@\"; " + after + ";;\n"
+                + "  *) exec \"" + real + "\" \"$@\";;\n"
+                + "esac\n");
+        assertTrue(script.toFile().setExecutable(true));
+        return new Git(script, Duration.ofSeconds(60));
+    }
+
+    private void assertNothingLeft(Path repo) throws IOException {
+        assertEquals("", git(repo, "branch", "--list", "consilium/*"), "no branch");
+        assertEquals(1, git(repo, "worktree", "list", "--porcelain").lines().filter(line -> line.startsWith("worktree ")).count(),
+                "no registration");
+        Path registrations = repo.resolve(".git/worktrees");
+        if (Files.exists(registrations)) {
+            try (var entries = Files.list(registrations)) {
+                assertEquals(List.of(), entries.toList(), "no metadata under .git/worktrees");
+            }
+        }
+        try (var left = Files.list(base)) {
+            assertEquals(List.of(), left.filter(path -> !path.getFileName().toString().startsWith(".")).toList(), "no folder");
+        }
     }
 
     @Test

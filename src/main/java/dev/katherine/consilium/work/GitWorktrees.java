@@ -30,7 +30,7 @@ public interface GitWorktrees {
     /** Files the branch changed since its worktree was created; works after the worktree folder is gone. */
     List<String> changedFiles(Path repositoryRoot, Worktree worktree) throws IOException;
 
-    /** True when the worktree has changes its agent did not commit. */
+    /** True when the worktree has changes its agent did not commit; false once its folder is gone. */
     boolean hasUncommittedChanges(Worktree worktree) throws IOException;
 
     /**
@@ -38,8 +38,24 @@ public interface GitWorktrees {
      * itself, so the agent never needs write access to the repository's {@code .git}.
      *
      * @return false if there was nothing to commit
+     * @throws NestedRepositoryException if the copy holds another repository; nothing is staged then
      */
     boolean commitAll(Worktree worktree, String message) throws IOException;
+
+    /**
+     * The first git repository found inside the copy below its root (a {@code .git} directory or
+     * file), relative to the copy, or null if there is none or the folder is gone.
+     */
+    @Nullable String nestedRepository(Worktree worktree) throws IOException;
+
+    /** Paths the branch records as gitlinks (submodule entries) that it added or changed since the copy was made. */
+    List<String> changedGitlinks(Path repositoryRoot, Worktree worktree) throws IOException;
+
+    /**
+     * The repository's {@code core.hooksPath} relative to its root, with {@code /} separators, or
+     * null when it is unset or lies outside the repository (no branch can change it then).
+     */
+    @Nullable String hooksPathInRepository(Path repositoryRoot) throws IOException;
 
     /**
      * True if {@code path} lies inside the directory where this service creates worktrees. Stored

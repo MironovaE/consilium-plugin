@@ -223,6 +223,21 @@ class ChatSessionTest {
         }
 
         @Override
+        public String nestedRepository(Worktree worktree) {
+            return null;
+        }
+
+        @Override
+        public List<String> changedGitlinks(Path repositoryRoot, Worktree worktree) {
+            return List.of();
+        }
+
+        @Override
+        public String hooksPathInRepository(Path repositoryRoot) {
+            return null;
+        }
+
+        @Override
         public boolean branchExists(Path repositoryRoot, String branch) {
             return branches.contains(branch);
         }
