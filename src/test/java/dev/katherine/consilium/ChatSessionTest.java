@@ -188,11 +188,6 @@ class ChatSessionTest {
         }
 
         @Override
-        public String currentBranch(Path repositoryRoot) {
-            return "main";
-        }
-
-        @Override
         public Worktree create(Path repositoryRoot, String agentName) {
             Worktree worktree = new Worktree(Path.of("/wt/" + agentName), "consilium/" + agentName + "-1", "base");
             created.add(worktree);

@@ -245,15 +245,6 @@ class GitCliWorktreesTest {
     }
 
     @Test
-    void currentBranchIsNullOnADetachedHead() throws IOException {
-        Path repo = TestRepositories.init(dir.resolve("repo"), true);
-        assertEquals("main", worktrees.currentBranch(repo));
-
-        git(repo, "checkout", "-q", "--detach");
-        assertNull(worktrees.currentBranch(repo));
-    }
-
-    @Test
     void uncommittedChangesInTheMainCheckoutAreReported() throws IOException {
         Path repo = TestRepositories.init(dir.resolve("repo"), true);
         assertFalse(worktrees.hasUncommittedChanges(repo));

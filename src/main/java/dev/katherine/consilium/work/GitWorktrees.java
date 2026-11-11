@@ -18,9 +18,6 @@ public interface GitWorktrees {
     /** True when the work tree has uncommitted changes, which a new worktree would not contain. */
     boolean hasUncommittedChanges(Path repositoryRoot) throws IOException;
 
-    /** The checked-out branch name, or null on a detached HEAD. */
-    @Nullable String currentBranch(Path repositoryRoot) throws IOException;
-
     /**
      * Creates a worktree on a new branch {@code consilium/<agent>-<timestamp>} from HEAD, in a
      * directory outside the project (so the IDE doesn't index it and it never shows as untracked).

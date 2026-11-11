@@ -70,14 +70,6 @@ public final class GitCliWorktrees implements GitWorktrees {
     }
 
     @Override
-    public @Nullable String currentBranch(Path repositoryRoot) throws IOException {
-        Git.Result result = git().run(repositoryRoot, "symbolic-ref", "--quiet", "--short", "HEAD");
-        if (result.exitCode() == 1 && result.error().isEmpty()) return null;
-        if (!result.succeeded()) throw Git.failure(result, "symbolic-ref", "--quiet", "--short", "HEAD");
-        return result.output().stripTrailing();
-    }
-
-    @Override
     public synchronized Worktree create(Path repositoryRoot, String agentName) throws IOException {
         Path repository = repositoryRoot.toRealPath();
         Git.Result head = git().run(repository, "rev-parse", "--verify", "--quiet", "HEAD^{commit}");

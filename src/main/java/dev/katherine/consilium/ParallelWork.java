@@ -23,7 +23,7 @@ final class ParallelWork {
     private static final Logger LOG = Logger.getInstance(ParallelWork.class);
 
     /** Worktrees ready for a parallel turn. */
-    record Prepared(Path repository, boolean uncommittedChangesLeftOut, Map<Speaker, Worktree> worktrees) {
+    record Prepared(boolean uncommittedChangesLeftOut, Map<Speaker, Worktree> worktrees) {
     }
 
     /** Parallel work can't start; the message says why, in the person's language. */
@@ -54,7 +54,7 @@ final class ParallelWork {
             for (Speaker agent : agents) {
                 created.put(agent, git.create(repository, agent.name().toLowerCase(Locale.ROOT)));
             }
-            return new Prepared(repository, dirty, created);
+            return new Prepared(dirty, created);
         } catch (IOException exception) {
             // Half a setup is worse than none: an agent without its copy would have nowhere to work.
             for (Worktree worktree : created.values()) removeQuietly(repository, worktree);
