@@ -30,9 +30,9 @@ final class ConversationPromptBuilder {
     /** @param writeHeader replaces the default task framing of a write turn (parallel part, merge) */
     static String build(List<ChatMessage> snapshot, Speaker agent, int seenThrough, boolean freshSession, String editorContext,
                         AgentAccess access, String writeHeader) {
-        boolean resumes = !freshSession && access == AgentAccess.READ_ONLY;
+        boolean resumes = !freshSession && !access.writes();
         StringBuilder result = new StringBuilder();
-        if (access == AgentAccess.WRITE) {
+        if (access.writes()) {
             result.append(writeHeader != null ? writeHeader : ConsiliumBundle.message("prompt.write"));
         } else if (freshSession) {
             result.append(ConsiliumBundle.message("prompt.discuss"));

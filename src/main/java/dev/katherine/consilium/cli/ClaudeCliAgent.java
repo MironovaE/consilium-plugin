@@ -44,7 +44,7 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
         command.add("stream-json");
         command.add("--verbose");
         command.add("--include-partial-messages");
-        if (access == AgentAccess.READ_ONLY) {
+        if (!access.writes()) {
             command.add("--tools");
             command.add("Read,Glob,Grep");
             // -p skips the workspace-trust dialog, so without these a cloned repository's
@@ -73,7 +73,7 @@ public final class ClaudeCliAgent extends AbstractCliAgent {
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
                                  Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
         List<String> command = arguments(projectRoot, sessionId, access);
-        if (access == AgentAccess.READ_ONLY) {
+        if (!access.writes()) {
             String kept = ClaudeUserSettings.discussionSubset(userSettings);
             if (kept != null) {
                 command.add("--settings");

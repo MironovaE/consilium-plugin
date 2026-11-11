@@ -36,7 +36,7 @@ public final class CodexCliAgent extends AbstractCliAgent {
     @Override
     List<String> launchArguments(Path binary, Path projectRoot, @Nullable String sessionId, AgentAccess access,
                                  Map<String, String> environment, TurnFiles files, BooleanSupplier cancelled) throws IOException {
-        if (access == AgentAccess.WRITE) return arguments(projectRoot, sessionId, access);
+        if (access.writes()) return arguments(projectRoot, sessionId, access);
         List<String> servers = CodexMcpServers.enabled(binary, projectRoot, environment, mcpListTimeout, cancelled);
         return arguments(projectRoot, sessionId, access, servers);
     }
@@ -57,7 +57,7 @@ public final class CodexCliAgent extends AbstractCliAgent {
     List<String> arguments(Path projectRoot, @Nullable String sessionId, AgentAccess access, List<String> mcpServersToDisable) {
         List<String> command = new ArrayList<>();
         command.add("exec");
-        String resumable = access == AgentAccess.READ_ONLY ? SessionIds.resumable(sessionId) : null;
+        String resumable = !access.writes() ? SessionIds.resumable(sessionId) : null;
         if (resumable != null) {
             // `exec resume` has no --sandbox flag: without -c it takes the sandbox from the user's
             // config (often workspace-write), and a discussion turn would write to the repository.
@@ -74,8 +74,8 @@ public final class CodexCliAgent extends AbstractCliAgent {
         } else {
             command.add("--json");
             command.add("--sandbox");
-            command.add(access == AgentAccess.WRITE ? "workspace-write" : "read-only");
-            if (access == AgentAccess.READ_ONLY) {
+            command.add(access.writes() ? "workspace-write" : "read-only");
+            if (!access.writes()) {
                 addNoEscalation(command);
                 command.addAll(CodexMcpServers.disableArguments(mcpServersToDisable));
             }

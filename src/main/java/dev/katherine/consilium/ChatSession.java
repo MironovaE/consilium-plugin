@@ -426,7 +426,7 @@ final class ChatSession {
         // session (codex can't set the sandbox when resuming). A stored id the CLI layer wouldn't
         // resume counts as no session here too, or the agent would get a follow-up prompt in a
         // session that has never seen the conversation.
-        String resumable = access == AgentAccess.WRITE ? null : SessionIds.resumable(session.sessionId);
+        String resumable = access.writes() ? null : SessionIds.resumable(session.sessionId);
         boolean fresh = resumable == null;
         String prompt = ConversationPromptBuilder.build(snapshot, speaker, session.seenThrough, fresh, editorContext, access, writeHeader);
         Run run = new Run(speaker, access, role, snapshot.size(), resumable, view.answerStarted(speaker));
@@ -451,7 +451,7 @@ final class ChatSession {
         String answer = run.text().trim();
         if (answer.isEmpty()) answer = ConsiliumBundle.message("answer.empty");
         store.add(run.speaker, answer, MessageStatus.ANSWER);
-        if (run.access == AgentAccess.READ_ONLY) {
+        if (!run.access.writes()) {
             store.updateSession(run.speaker, run.sessionId, run.snapshotSize);
         } else {
             store.resetSession(run.speaker);
@@ -465,7 +465,7 @@ final class ChatSession {
         run.settled = true;
         run.outcome = MessageStatus.ERROR;
         store.add(run.speaker, detail, MessageStatus.ERROR);
-        if (run.access == AgentAccess.WRITE) store.resetSession(run.speaker);
+        if (run.access.writes()) store.resetSession(run.speaker);
         run.view.failed(detail);
         release(run);
     }
@@ -497,7 +497,7 @@ final class ChatSession {
         // The full text, not the last rendered frame: a frame may still be queued.
         String partial = run.text().trim();
         if (!partial.isEmpty()) store.add(run.speaker, partial, MessageStatus.STOPPED);
-        if (run.access == AgentAccess.WRITE) store.resetSession(run.speaker);
+        if (run.access.writes()) store.resetSession(run.speaker);
     }
 
     /**
