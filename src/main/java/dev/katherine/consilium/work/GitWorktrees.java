@@ -12,6 +12,13 @@ import java.util.List;
  * Every method blocks on a git process; never call it on the UI thread.
  */
 public interface GitWorktrees {
+    /**
+     * Records the repository of a copy made before 0.5.0, which kept no such record, so git in that
+     * copy can find its registration again. Does nothing for a copy that has one or isn't Consilium's.
+     */
+    default void adopt(Path repositoryRoot, Worktree worktree) throws IOException {
+    }
+
     /** The repository's top-level directory, or null if {@code projectRoot} isn't inside a git work tree. */
     @Nullable Path repositoryRoot(Path projectRoot) throws IOException;
 

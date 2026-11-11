@@ -315,6 +315,45 @@ class GitCliWorktreesTest {
     }
 
     @Test
+    void aCopyFromBeforeTheRepositoryRecordIsAdoptedAndCommitsAgain() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        Files.writeString(worktree.path().resolve("part.txt"), "work");
+        // 0.4.0 kept no record next to its copies.
+        Files.delete(worktree.path().getParent().resolve(".repository"));
+        assertThrows(IOException.class, () -> worktrees.commitAll(worktree, "part"));
+
+        worktrees.adopt(repo, worktree);
+
+        assertTrue(worktrees.commitAll(worktree, "part"));
+        assertEquals(1, worktrees.commitsSinceCreated(repo, worktree).size());
+    }
+
+    @Test
+    void adoptNeverClaimsAnotherRepositorysCopies() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Path other = TestRepositories.init(dir.resolve("other"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        Path record = worktree.path().getParent().resolve(".repository");
+        Files.delete(record);
+
+        worktrees.adopt(other, worktree);
+
+        assertFalse(Files.exists(record), "the folder's name says it holds copies of another repository");
+    }
+
+    @Test
+    void changedFilesComeUnquoted() throws IOException {
+        Path repo = TestRepositories.init(dir.resolve("repo"), true);
+        Worktree worktree = worktrees.create(repo, "claude");
+        Path commands = Files.createDirectories(worktree.path().resolve(".claude/commands"));
+        Files.writeString(commands.resolve("café.md"), "run me");
+        worktrees.commitAll(worktree, "part");
+
+        assertEquals(List.of(".claude/commands/café.md"), worktrees.changedFiles(repo, worktree));
+    }
+
+    @Test
     void aGitFileCountsAsANestedRepositoryToo() throws IOException {
         Path repo = TestRepositories.init(dir.resolve("repo"), true);
         Worktree worktree = worktrees.create(repo, "claude");

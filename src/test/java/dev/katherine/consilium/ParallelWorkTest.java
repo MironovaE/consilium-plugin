@@ -72,6 +72,15 @@ class ParallelWorkTest {
     }
 
     @Test
+    void namesDifferingOnlyInCaseAreHeldToo() {
+        // On macOS and Windows these are the files Claude Code and git open.
+        assertEquals(ParallelWork.Review.AGENT_SETTINGS, ParallelWork.classify(".MCP.json", null));
+        assertEquals(ParallelWork.Review.AGENT_SETTINGS, ParallelWork.classify(".Claude/settings.json", null));
+        assertEquals(ParallelWork.Review.HOOKS, ParallelWork.classify(".Husky/pre-commit", null));
+        assertEquals(ParallelWork.Review.HOOKS, ParallelWork.classify("Tools/Hooks/pre-push", "tools/hooks"));
+    }
+
+    @Test
     void theConfiguredHooksPathIsHeldWhereverItIs() {
         assertEquals(ParallelWork.Review.HOOKS, ParallelWork.classify("tools/git-hooks/pre-push", "tools/git-hooks"));
         assertNull(ParallelWork.classify("tools/git-hooks-notes.md", "tools/git-hooks"));

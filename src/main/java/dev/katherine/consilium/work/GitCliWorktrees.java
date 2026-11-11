@@ -55,6 +55,13 @@ public final class GitCliWorktrees implements GitWorktrees {
     /** File in each repository's folder of copies naming the repository; see {@link #recordRepository}. */
     private static final String REPOSITORY_RECORD = ".repository";
 
+    /**
+     * Every window has its own instance, and two windows on one repository may start parallel work
+     * in the same second: one lock for the whole IDE keeps their names, and the cleanup of a failed
+     * add, from touching each other's copies.
+     */
+    private static final Object CREATE_LOCK = new Object();
+
     private final Path baseDirectory;
     private final Clock clock;
     private final Duration addTimeout;
@@ -99,16 +106,20 @@ public final class GitCliWorktrees implements GitWorktrees {
     }
 
     @Override
-    public synchronized Worktree create(Path repositoryRoot, String agentName) throws IOException {
+    public Worktree create(Path repositoryRoot, String agentName) throws IOException {
+        synchronized (CREATE_LOCK) {
+            return createLocked(repositoryRoot, agentName);
+        }
+    }
+
+    private Worktree createLocked(Path repositoryRoot, String agentName) throws IOException {
         Path repository = repositoryRoot.toRealPath();
         Git.Result head = git().run(repository, "rev-parse", "--verify", "--quiet", "HEAD^{commit}");
         if (!head.succeeded()) throw new IOException(ConsiliumBundle.message("error.worktree.no.commits", repository));
         String baseCommit = head.output().strip();
 
         // The real path: git records it in the worktree's metadata, and cleanup matches on it.
-        Path parent = Files.createDirectories(baseDirectory.resolve(
-                slug(repository.getFileName() == null ? "repository" : repository.getFileName().toString())
-                        + "-" + shortHash(repository.toString()))).toRealPath();
+        Path parent = Files.createDirectories(baseDirectory.resolve(copiesFolderName(repository))).toRealPath();
         if (parent.startsWith(repository)) {
             throw new IOException(ConsiliumBundle.message("error.worktree.inside.repository", parent, repository));
         }
@@ -130,7 +141,7 @@ public final class GitCliWorktrees implements GitWorktrees {
      * Runs {@code worktree add} and, if it fails or times out, removes what it got as far as making:
      * the folder, the registration under {@code .git/worktrees} and the branch. Left behind, each retry
      * would add another orphan the person never asked for. All three are known to be new: the caller
-     * checked that neither the folder nor the branch existed, under the {@link #create} lock.
+     * checked that neither the folder nor the branch existed, under {@link #CREATE_LOCK}.
      */
     private void addWorktree(Path repository, Path directory, String branch, String baseCommit) throws IOException {
         String[] arguments = {"worktree", "add", "-b", branch, "--", directory.toString(), baseCommit};
@@ -179,9 +190,11 @@ public final class GitCliWorktrees implements GitWorktrees {
 
     @Override
     public List<String> changedFiles(Path repositoryRoot, Worktree worktree) throws IOException {
-        String names = git().output(repositoryRoot, "diff", "--name-only",
+        // -z: names come raw, not C-quoted ("\"caf\\303\\251\"" would hide a .claude/ segment), and a
+        // newline inside a name can't split it in two.
+        String names = git().output(repositoryRoot, "diff", "--name-only", "-z",
                 worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--");
-        return names.isEmpty() ? List.of() : names.lines().toList();
+        return java.util.Arrays.stream(names.split("\0")).filter(name -> !name.isEmpty()).toList();
     }
 
     @Override
@@ -215,7 +228,7 @@ public final class GitCliWorktrees implements GitWorktrees {
     @Override
     public List<String> changedGitlinks(Path repositoryRoot, Worktree worktree) throws IOException {
         // Raw lines read ":<old mode> <new mode> <old id> <new id> <status>\t<path>".
-        String raw = git().output(repositoryRoot, "diff", "--raw", "--no-renames", "--no-ext-diff",
+        String raw = git().output(repositoryRoot, "-c", "core.quotePath=false", "diff", "--raw", "--no-renames", "--no-ext-diff",
                 worktree.baseCommit() + "..refs/heads/" + worktree.branch(), "--");
         List<String> gitlinks = new ArrayList<>();
         for (String line : raw.lines().toList()) {
@@ -299,6 +312,24 @@ public final class GitCliWorktrees implements GitWorktrees {
                     + " registrations of the worktree " + worktree.path());
         }
         return found.getFirst();
+    }
+
+    @Override
+    public void adopt(Path repositoryRoot, Worktree worktree) throws IOException {
+        Path parent = worktree.path().toAbsolutePath().normalize().getParent();
+        if (parent == null || !owns(worktree.path())) return;
+        if (Files.isRegularFile(parent.resolve(REPOSITORY_RECORD), LinkOption.NOFOLLOW_LINKS)) return;
+        Path repository = repositoryRoot.toRealPath();
+        // Only the folder create() would have made for this repository: its name carries the
+        // repository's path hash, so a copy of another repository is never claimed by this one.
+        if (!parent.getFileName().toString().equals(copiesFolderName(repository))) return;
+        if (!Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) return;
+        recordRepository(parent, repository);
+    }
+
+    private static String copiesFolderName(Path repository) {
+        return slug(repository.getFileName() == null ? "repository" : repository.getFileName().toString())
+                + "-" + shortHash(repository.toString());
     }
 
     /**

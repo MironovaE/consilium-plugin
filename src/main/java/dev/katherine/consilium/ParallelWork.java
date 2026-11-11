@@ -124,6 +124,11 @@ final class ParallelWork {
         List<PendingWork> present = new ArrayList<>();
         for (PendingWork part : parts) {
             try {
+                git.adopt(repository, worktree(part));
+            } catch (IOException exception) {
+                LOG.warn("Couldn't record the repository of " + part.path, exception);
+            }
+            try {
                 if (git.branchExists(repository, part.branch)) present.add(part);
             } catch (IOException exception) {
                 LOG.warn("Couldn't check the branch " + part.branch, exception);
@@ -209,8 +214,12 @@ final class ParallelWork {
      *
      * @param hooksPath the repository's {@code core.hooksPath} relative to its root, if it lies inside
      */
-    static @Nullable Review classify(String file, @Nullable String hooksPath) {
-        if (hooksPath != null && (hooksPath.isEmpty() || file.startsWith(hooksPath + "/"))) return Review.HOOKS;
+    static @Nullable Review classify(String path, @Nullable String hooksPath) {
+        // Lower case: on macOS and Windows ".Claude/settings.json" is the file Claude Code opens.
+        String file = path.toLowerCase(Locale.ROOT);
+        if (hooksPath != null && (hooksPath.isEmpty() || file.startsWith(hooksPath.toLowerCase(Locale.ROOT) + "/"))) {
+            return Review.HOOKS;
+        }
         String[] segments = file.split("/");
         String name = segments[segments.length - 1];
         if (name.equals(".gitmodules")) return Review.NESTED_REPOSITORY;
