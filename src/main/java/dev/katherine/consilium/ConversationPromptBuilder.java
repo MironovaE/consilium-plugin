@@ -23,11 +23,7 @@ final class ConversationPromptBuilder {
     private ConversationPromptBuilder() {
     }
 
-    static String build(List<ChatMessage> snapshot, Speaker agent, int seenThrough, boolean freshSession, String editorContext, AgentAccess access) {
-        return build(snapshot, agent, seenThrough, freshSession, editorContext, access, null);
-    }
-
-    /** @param writeHeader replaces the default task framing of a write turn (parallel part, merge) */
+    /** @param writeHeader replaces the default task framing of a write turn (parallel part, merge); null keeps it */
     static String build(List<ChatMessage> snapshot, Speaker agent, int seenThrough, boolean freshSession, String editorContext,
                         AgentAccess access, String writeHeader) {
         boolean resumes = !freshSession && !access.writes();
