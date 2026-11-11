@@ -44,6 +44,9 @@ public final class ClaudeIntentClassifier implements IntentClassifier {
      * haiku                   54/56   0                         2.5 s   3.7 s
      * </pre>
      *
+     * Rerun on 2026-11-11 for the default model only, after "continue" became discussion: 61/61
+     * exact, 0 dangerous, p50 2.2 s, p95 2.6 s.
+     *
      * Haiku is no faster at low effort and misread English go-aheads ("do it", "go ahead, both of
      * you") as unclear. Pinning "opus" would be as good here, but an alias the account or provider
      * (Bedrock, Vertex, a team plan) doesn't serve would fail every call, and a failure silently
@@ -85,7 +88,9 @@ public final class ClaudeIntentClassifier implements IntentClassifier {
             subject is a code change: "что думаете про кеширование", "как бы вы сделали", \
             "посмотрите и скажите", "предложите план", "how would you fix it", "review the diff". \
             Asking to discuss first and act later ("можете обсудить и потом сделать?") is DISCUSS. \
-            A question about whether something is possible or a good idea is DISCUSS.
+            A question about whether something is possible or a good idea is DISCUSS. \
+            Asking to continue, go on or finish what was being said carries no new task and is \
+            DISCUSS: продолжай, продолжайте, дальше, договори, continue, go on, keep going.
             - WORK: an explicit instruction to change the project now: write or edit code or files, \
             fix, implement, refactor, delete, run commands that change things, commit. Imperatives \
             such as сделай/сделайте, делайте, исправь, поправь, реализуй, внеси, добавь, удали, \

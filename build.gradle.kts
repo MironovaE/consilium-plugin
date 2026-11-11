@@ -69,7 +69,9 @@ intellijPlatform {
             "does" turns load the project's own agent settings only in a trusted project, never in an
             agent's copy; a part that changes hooks, agent settings or holds another repository waits
             for you, and the notice says why; markdown renders through public API; the chat no longer
-            pulls you back down while you scroll up during an answer.</p>
+            pulls you back down while you scroll up during an answer; "continue" goes on with the
+            discussion instead of asking whether to start work; parallel copies where neither agent
+            changed anything are removed instead of left waiting for a merge.</p>
         """.trimIndent()
     }
 }
