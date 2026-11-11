@@ -35,27 +35,34 @@ If you prefer to choose yourself, **Mode** still has the explicit modes:
 
 The coordination rule: **two agents never write to the same files at once.** In a "does" turn the other agent is not started. When both work in parallel:
 
-- Each has its own git worktree and branch outside the project, starting from the last commit. Uncommitted changes aren't in the copies, and Consilium says so.
-- The agents don't commit; Consilium commits each part on its branch when the agent is done, or when you say "merge" after a part was stopped. An agent in a copy gets no write access to the repository's `.git`, and Consilium's own git commands in a copy run with hooks and fsmonitor switched off, so a hook an agent edits in its copy (a husky `.husky/` script, a pre-commit config) never runs outside its sandbox.
-- Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge". A part that changes git hook settings (`.husky/`, a pre-commit or lefthook config, `package.json`) isn't merged automatically either, because merging runs those hooks in the project: Consilium asks you to look and say "merge".
+- Each has its own git worktree on a `consilium/<agent>-<time>` branch, starting from the last commit. The copies live outside the project, in the IDE's system folder under `consilium-worktrees`. Uncommitted changes aren't in the copies, and Consilium says so.
+- The agents don't commit; Consilium commits each part on its branch when the agent is done, or when you say "merge" after a part was stopped. Codex works in its copy inside its `workspace-write` sandbox, which keeps it out of the repository's `.git`; Claude has no such sandbox and is only told not to commit. In a copy, both agents load only your own agent settings, never the copy's `.claude/`, `.mcp.json` or `.codex/`, since the other agent could have written them.
+- Consilium's own git commands in a copy run with hooks, fsmonitor, signing, external diff tools and submodules switched off, and take the repository location from Consilium's own record rather than from the copy's `.git` file. A hook or git setting an agent writes in its copy never runs outside its sandbox.
+- Only the merging agent touches the project, and only when the project has no uncommitted changes of yours; otherwise Consilium waits for you to commit or stash them and say "merge". A part isn't merged automatically, and Consilium says which file held it, if it changes git hooks (`.husky/`, the folder in `core.hooksPath`, a pre-commit, lefthook or husky config, `package.json`), changes agent settings that run commands (`.claude/`, `.codex/`, `.mcp.json`), or contains another git repository or a submodule. Merging would run those in the project, so you look first and say "merge". A "merge" after a stopped part runs the same check, and the first one only tells you what it found.
 - If a part fails, is stopped, or changes nothing, nothing is merged and the work stays on its branch until you say "merge". **Clear** keeps that work too and says where it is. A new parallel task starts only after earlier parts are merged.
 - Parallel work needs a git repository with at least one commit.
 
 How read-only is enforced:
 
 - **Codex** runs with the `read-only` sandbox and `approval_policy="never"`, also when resuming a session. Without the second setting, an auto-approving reviewer in the user's Codex config could approve a write after the sandbox denied it. Every MCP server from your Codex configuration (user or project) is switched off for the turn, because MCP servers run outside the sandbox: Consilium lists them with `codex mcp list --json` first, and if that fails, or a server's name can't be switched off from the command line (only letters, digits, `_` and `-` can), the turn doesn't start and the card says why.
-- **Claude Code** gets only the `Read`, `Glob` and `Grep` built-in tools and runs with `--restricted`, `--strict-mcp-config` and `--permission-prompts none`: no MCP servers, no settings files from the repository (so a cloned repository's hooks can't run), and no tool call that would need approval. From your own `~/.claude/settings.json` only the model, effort, `env` and sign-in helpers (`apiKeyHelper`, AWS helpers) are passed back, through a temporary file readable only by you; hooks, permissions and plugins are not.
+- **Claude Code** gets only the `Read`, `Glob` and `Grep` built-in tools and runs with `--restricted`, `--strict-mcp-config` and `--permission-prompts none`: no MCP servers, no settings files from the repository (so a cloned repository's hooks can't run), and no tool call that would need approval. From your own settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that is set) only the model, effort, thinking and login-method settings, `env` and sign-in helpers (`apiKeyHelper`, AWS helpers) are passed back, through a file readable only by you; hooks, permissions and plugins are not.
+
+Which settings a "does" turn loads:
+
+- **In the project, when IntelliJ trusts it:** each CLI runs with its full configuration, the project's own `.claude/settings.json`, `.mcp.json` and `.codex/config.toml` included, as in a terminal.
+- **In a project IntelliJ doesn't trust, and always in an agent's copy:** only your own. Claude runs with `--setting-sources user` (your settings and MCP servers, none of the project's); Codex runs with the folder marked untrusted for that turn (`-c projects={"<folder>"={trust_level="untrusted"}}` with `approval_policy="on-request"`), so it neither loads the project's config nor records the folder as trusted.
 
 Other details:
 
-- Answers stream as the CLI produces them. **Stop** ends the turn and every process still attached to it (MCP servers, test runs, background commands); the partial answer stays in the transcript, marked as cut off. A new turn starts only after every process from the previous one has exited.
+- Answers stream as the CLI produces them. A turn whose answer grows past 4 MB of text is stopped and shown as an error. **Stop** ends the turn and every process still attached to it (MCP servers, test runs, background commands); the partial answer stays in the transcript, marked as cut off. A new turn starts only after every process from the previous one has exited.
 - In discussion modes each agent resumes its own CLI session and receives only the messages it has not seen yet. A "does" turn always starts a fresh session with the full transcript: a clean task context, with permissions set explicitly rather than inherited. After it, that agent's next discussion turn starts fresh too, so it sees its own report of what it changed.
 - Each message reaches the agents as a tagged block, and only your blocks count as instructions. The agents are told to treat each other's text as quoted opinion, so an agent that read a hostile file can't simply pose as you; like any prompt-level defense, this lowers the risk rather than ruling it out.
 - An agent that fails shows its error in red; errors are never passed to the other agent as something said.
 - Optional editor context attaches the open file's path and the current selection.
-- The transcript is stored per project, locally.
+- The transcript is stored per project, locally, outside the project folder (see Security and privacy).
+- In **Auto**, the call that reads your message gets at most its first and last 8,000 characters and runs at low effort, whatever your own setting.
 
-Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent uses your account and, in "does" turns, its own settings, skills, and MCP servers. The plugin keeps no credentials of its own. For Claude's discussion turns it reads the model, `env` and sign-in keys of your `~/.claude/settings.json` (see above), which may include an API key, and hands them back to the CLI through a temporary file readable only by you, deleted when the turn ends.
+Consilium does not talk to any API itself. It runs the official `claude` and `codex` CLIs that are already installed and signed in on your machine, so each agent uses your account and, in "does" turns in a trusted project, its own settings, skills, and MCP servers. The plugin keeps no credentials of its own. For Claude's discussion turns it reads the model, `env` and sign-in keys of your `~/.claude/settings.json` (see above), which may include an API key, and hands them back to the CLI through a temporary file readable only by you, deleted when the turn ends.
 
 The interface follows the IDE language: English by default, Russian when the IDE runs with a Russian locale. Agents are asked to reply in the language you write in.
 
@@ -80,7 +87,7 @@ Controls:
 
 - **editor context** — when checked, the message carries the path of the file open in the editor and the selected text, if any. Uncheck it to send the message alone.
 - **Stop** — cancels the current turn. What the agent managed to write stays in the transcript, marked as cut off.
-- **Clear** — empties the transcript and forgets both agents' CLI sessions, so the next message starts from scratch. It can't be undone. Unmerged parallel work isn't touched: the new transcript says which branches still hold it.
+- **Clear** — available between turns. Empties the transcript and forgets both agents' CLI sessions, so the next message starts from scratch. It can't be undone. Unmerged parallel work isn't touched: the new transcript says which branches still hold it.
 
 The agents work in the project's root folder, so ask about the repository directly: *"Look at the scanner and tell me how it skips video files."*
 
@@ -95,9 +102,11 @@ The agents work in the project's root folder, so ask about the repository direct
 ## Security and privacy
 
 - Messages, the transcript the agents need, and the editor context (file path and selection) go to Anthropic and OpenAI through their CLIs, exactly as if you typed them there. In **Auto**, each message also goes once more to Claude, alone, to read what it asks for. Uncheck **editor context** to send the message alone.
-- The transcript is stored in plain text in the project's `.idea/workspace.xml`, which IDEA's default `.idea/.gitignore` keeps out of git. **Clear** removes it there; the CLIs keep their own session logs in `~/.claude` and `~/.codex`.
+- The transcript is stored in plain text in the IDE's system folder, `consilium/<project hash>.json`, readable only by you, never inside the project, so a cloned repository can't plant messages in it. Versions up to 0.4.0 kept it in the project's `.idea/workspace.xml`; it is brought over once, and only from a project IntelliJ trusts. Moving or renaming the project folder starts a new transcript. **Clear** removes it; the CLIs keep their own session logs in `~/.claude` and `~/.codex`.
+- The temporary files a turn needs (the settings Claude gets back) live in a folder only you can read, in the IDE's system folder, and are deleted when the turn ends.
 - Answers are shown with raw HTML removed: nothing in an answer can load an image or any other URL, and only `http`, `https` and `mailto` links open, on click.
-- A **does** turn runs the agent in its own auto-approval mode inside the project: it can edit files and run commands. Use it in repositories you trust.
+- A **does** turn runs the agent in its own auto-approval mode inside the project: it can edit files and run commands. Use it in repositories you trust. In a project IntelliJ doesn't trust, the agent still works, but without the project's own agent settings (see "Which settings a 'does' turn loads").
+- codex-cli records every folder where a normal **does** turn runs as trusted in `~/.codex/config.toml`; this is Codex's own behavior, not Consilium's. Turns in agents' copies and in untrusted projects don't add such entries.
 
 ## Build from source
 
@@ -111,7 +120,7 @@ The plugin ZIP lands in `build/distributions/`. The build compiles against the I
 
 MVP, version 0.4.0. Open questions and deliberate decisions are tracked in [BACKLOG.md](BACKLOG.md).
 
-The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.322, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points there. The stored transcript keeps the latest 300 messages.
+The CLI flags the plugin passes are pinned in `CliCommandTest`, with the CLI versions they were last checked against (Claude Code 2.1.322, codex-cli 0.167.0). If a CLI upgrade makes an agent fail at launch, the error message points to the code that builds the command. The stored transcript keeps the latest 300 messages.
 
 ## License
 

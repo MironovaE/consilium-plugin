@@ -3,10 +3,7 @@
     <name>Consilium</name>
     <vendor>Katherine Mironova</vendor>
 
-    <description><![CDATA[
-        A private local chat with Claude Code and Codex inside the IDE.
-        Both agents can discuss independently; an explicitly selected agent can also work in the repository.
-    ]]></description>
+    <!-- The description, version and change notes are set by build.gradle.kts at build time. -->
 
     <depends>com.intellij.modules.platform</depends>
     <dependencies>

@@ -6,8 +6,9 @@ import org.jetbrains.annotations.Nullable;
 import java.util.regex.Pattern;
 
 /**
- * Session ids come back from workspace.xml, which lives in the project and can be edited by
- * anyone who can commit to it. They end up in argv, so a value such as
+ * Session ids come back from stored state, and up to 0.4.0 that state lived in the project's
+ * workspace.xml, which anyone who can commit to the project can edit; a state brought over from
+ * there still passes through here. They end up in argv, so a value such as
  * {@code --dangerously-bypass-approvals-and-sandbox} must never reach the CLI as a flag.
  */
 public final class SessionIds {
