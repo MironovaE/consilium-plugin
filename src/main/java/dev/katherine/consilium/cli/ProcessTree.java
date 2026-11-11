@@ -13,6 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * A CLI process with everything it spawned: MCP servers, shell commands, a dev server started with
@@ -30,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * polls escapes; Java offers no process groups to close that gap.
  */
 final class ProcessTree {
-    static final Duration KILL_GRACE = Duration.ofSeconds(2);
+    private static final Duration KILL_GRACE = Duration.ofSeconds(2);
     private static final Duration POLL_INTERVAL = Duration.ofMillis(500);
     // After SIGKILL only an unkillable process (stuck in the kernel) remains; stop waiting for it so
     // terminated() can't hang the panel.
@@ -38,13 +39,27 @@ final class ProcessTree {
     private static final Logger LOG = Logger.getInstance(ProcessTree.class);
 
     private final Process root;
+    private final Duration killGrace;
+    private final Duration giveUpAfterKill;
+    private final Consumer<ProcessHandle> forceKill;
     private final Set<ProcessHandle> seen = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean stopping = new AtomicBoolean();
     private final CompletableFuture<Void> gone = new CompletableFuture<>();
     private final ScheduledFuture<?> poll;
 
     ProcessTree(Process root) {
+        this(root, KILL_GRACE, GIVE_UP_AFTER_KILL, ProcessHandle::destroyForcibly);
+    }
+
+    /**
+     * For tests: shorter waits, and a {@code forceKill} that may leave a process alive to stand in
+     * for one stuck in the kernel, which a test can't produce on demand.
+     */
+    ProcessTree(Process root, Duration killGrace, Duration giveUpAfterKill, Consumer<ProcessHandle> forceKill) {
         this.root = root;
+        this.killGrace = killGrace;
+        this.giveUpAfterKill = giveUpAfterKill;
+        this.forceKill = forceKill;
         poll = scheduler().scheduleWithFixedDelay(this::recordDescendants, 0, POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
         // Once the CLI itself has exited, whatever it left behind is an orphan: reap it right away.
         root.onExit().thenRun(this::stop);
@@ -72,7 +87,8 @@ final class ProcessTree {
 
     /**
      * Sends SIGTERM to the descendants and then the CLI, and SIGKILL to whatever is still alive
-     * {@link #KILL_GRACE} later. Never blocks; repeated calls are no-ops.
+     * {@link #KILL_GRACE} later; {@link #gone()} completes at the latest {@link #GIVE_UP_AFTER_KILL}
+     * after that. Never blocks; repeated calls are no-ops.
      */
     void stop() {
         if (!stopping.compareAndSet(false, true)) return;
@@ -96,12 +112,12 @@ final class ProcessTree {
 
         ScheduledFuture<?> kill = scheduler().schedule(() -> {
             for (ProcessHandle handle : tree) {
-                if (handle.isAlive()) handle.destroyForcibly();
+                if (handle.isAlive()) forceKill.accept(handle);
             }
-        }, KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS);
+        }, killGrace.toMillis(), TimeUnit.MILLISECONDS);
         ScheduledFuture<?> giveUp = scheduler().schedule(() -> {
             if (gone.complete(null)) LOG.warn("CLI process tree still alive after SIGKILL; no longer waiting for it");
-        }, KILL_GRACE.plus(GIVE_UP_AFTER_KILL).toMillis(), TimeUnit.MILLISECONDS);
+        }, killGrace.plus(giveUpAfterKill).toMillis(), TimeUnit.MILLISECONDS);
         allExited.whenComplete((ignored, error) -> {
             kill.cancel(false);
             giveUp.cancel(false);

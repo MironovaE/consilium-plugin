@@ -169,6 +169,42 @@ class CliRunTest {
     }
 
     @Test
+    void aTreeThatIgnoresSigtermIsKilled() throws Exception {
+        // An ignored signal stays ignored across fork and exec, so the child ignores SIGTERM too.
+        Path cli = script("trap '' TERM\nsleep 300 &\necho $! > '" + dir.resolve("child.pid") + "'\nwait");
+        Process process = new ProcessBuilder(cli.toString()).start();
+        long child = pid("child.pid");
+        ProcessTree tree = new ProcessTree(process, Duration.ofSeconds(1), Duration.ofSeconds(30), ProcessHandle::destroyForcibly);
+
+        tree.stop();
+        Thread.sleep(300);
+        assertTrue(process.isAlive() && ProcessHandle.of(child).map(ProcessHandle::isAlive).orElse(false),
+                "SIGTERM alone must not have stopped the tree, or this test proves nothing");
+        tree.gone().get(20, TimeUnit.SECONDS);
+        assertGone(process.pid());
+        assertGone(child);
+    }
+
+    @Test
+    void aProcessThatSurvivesSigkillStopsBeingWaitedFor() throws Exception {
+        Path cli = script("trap '' TERM\necho $$ > '" + dir.resolve("root.pid") + "'\nwhile true; do sleep 1; done");
+        Process process = new ProcessBuilder(cli.toString()).start();
+        try {
+            // The pid file is written after the trap: a SIGTERM sent before it would end the test early.
+            pid("root.pid");
+            // A force kill that does nothing stands in for a process stuck in the kernel.
+            ProcessTree tree = new ProcessTree(process, Duration.ofMillis(200), Duration.ofMillis(300), handle -> { });
+
+            tree.stop();
+            tree.gone().get(20, TimeUnit.SECONDS);
+            assertTrue(process.isAlive(), "gone() must complete by giving up, not because the process exited");
+        } finally {
+            process.destroyForcibly();
+        }
+        assertGone(process.pid());
+    }
+
+    @Test
     void claudeTurnCompletesWithStreamedTextAndReceivesThePrompt() throws Exception {
         Path cli = script("cat > '" + dir.resolve("stdin") + "'\n"
                 + "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s-1\"}'\n"
