@@ -191,32 +191,39 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
     @Override
     public void messageAdded(ChatMessage message) {
         if (isWelcomeShown()) resetTranscript();
+        // Sending a message is a request to see the reply, so the user's own message always
+        // brings the transcript down; anything else follows only a reader already at the end.
+        boolean follow = message.speakerValue() == Speaker.USER || isFollowingEnd();
         addCard(messageList, message);
-        refreshTranscript();
+        refreshTranscript(follow);
     }
 
     @Override
     public ChatSession.AnswerView answerStarted(Speaker speaker) {
+        boolean follow = isFollowingEnd();
         MessageCard card = newCard(messageList, speaker, ConsiliumBundle.message("card.thinking", speaker.label()));
-        refreshTranscript();
+        refreshTranscript(follow);
         return new ChatSession.AnswerView() {
             @Override
             public void preview(String markdown) {
+                boolean follow = isFollowingEnd();
                 card.body().setMarkdown(markdown);
-                scrollToBottom();
+                if (follow) scrollToBottom();
             }
 
             @Override
             public void completed(String markdown) {
+                boolean follow = isFollowingEnd();
                 card.name().setText(speaker.label());
                 card.body().setMarkdown(markdown);
-                scrollToBottom();
+                if (follow) scrollToBottom();
             }
 
             @Override
             public void failed(String detail) {
+                boolean follow = isFollowingEnd();
                 showFailed(card, speaker, detail);
-                scrollToBottom();
+                if (follow) scrollToBottom();
             }
 
             @Override
@@ -324,9 +331,24 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
     }
 
     private void refreshTranscript() {
+        refreshTranscript(true);
+    }
+
+    private void refreshTranscript(boolean follow) {
         messageList.revalidate();
         messageList.repaint();
-        scrollToBottom();
+        if (follow) scrollToBottom();
+    }
+
+    /**
+     * Whether the reader is at the end of the transcript. Must be asked before the content grows:
+     * afterwards the end has moved and the answer is always "no". Jumping to the end
+     * unconditionally on every streamed chunk pulled a reader who had scrolled up back down
+     * several times a second, so scrolling during an answer was impossible.
+     */
+    private boolean isFollowingEnd() {
+        BoundedRangeModel model = transcriptScroll.getVerticalScrollBar().getModel();
+        return TranscriptFollow.isAtEnd(model.getValue(), model.getExtent(), model.getMaximum(), JBUI.scale(24));
     }
 
     private void scrollToBottom() {
