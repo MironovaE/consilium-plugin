@@ -2,24 +2,18 @@ package dev.katherine.consilium.work;
 
 import dev.katherine.consilium.ConsiliumBundle;
 import dev.katherine.consilium.cli.ExecutableResolver;
+import dev.katherine.consilium.process.BoundedProcess;
 
 import com.intellij.execution.ExecutionException;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.util.EnvironmentUtil;
-import com.intellij.util.concurrency.AppExecutorUtil;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Runs the {@code git} CLI without a shell. The process gets the login-shell environment the IDE
@@ -74,26 +68,14 @@ public final class Git {
             throw new IOException(ConsiliumBundle.message("error.git.failed", describe(arguments), exception.getMessage()), exception);
         }
         try {
-            process.getOutputStream().close();
-            // Both pipes drain concurrently so a long listing can't fill one and stall git.
-            CompletableFuture<byte[]> stdout = readAsync(process.getInputStream(), MAX_OUTPUT_BYTES);
-            CompletableFuture<byte[]> stderr = readAsync(process.getErrorStream(), MAX_ERROR_BYTES);
-            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                throw new IOException(ConsiliumBundle.message("error.git.timeout", describe(arguments), timeout.toSeconds()));
-            }
-            String output = new String(stdout.get(timeout.toMillis(), TimeUnit.MILLISECONDS), StandardCharsets.UTF_8);
-            String error = new String(stderr.get(timeout.toMillis(), TimeUnit.MILLISECONDS), StandardCharsets.UTF_8).strip();
-            return new Result(process.exitValue(), output, error);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IOException(ConsiliumBundle.message("error.git.failed", describe(arguments), "interrupted"), exception);
-        } catch (java.util.concurrent.ExecutionException | TimeoutException exception) {
-            throw new IOException(ConsiliumBundle.message("error.git.failed", describe(arguments), exception.getMessage()), exception);
-        } finally {
-            if (process.isAlive()) {
-                process.descendants().forEach(ProcessHandle::destroyForcibly);
-                process.destroyForcibly();
-            }
+            BoundedProcess.Result result = BoundedProcess.await(process, timeout, MAX_OUTPUT_BYTES, MAX_ERROR_BYTES, () -> false);
+            return new Result(result.exitCode(), new String(result.output(), StandardCharsets.UTF_8),
+                    new String(result.error(), StandardCharsets.UTF_8).strip());
+        } catch (BoundedProcess.Failure failure) {
+            String message = failure.kind() == BoundedProcess.Failure.Kind.TIMED_OUT
+                    ? ConsiliumBundle.message("error.git.timeout", describe(arguments), timeout.toSeconds())
+                    : ConsiliumBundle.message("error.git.failed", describe(arguments), failure.getMessage());
+            throw new IOException(message, failure);
         }
     }
 
@@ -111,18 +93,5 @@ public final class Git {
 
     private static String describe(String... arguments) {
         return "git " + String.join(" ", arguments);
-    }
-
-    /** Keeps the first {@code limit} bytes and drains the rest, so the writer never blocks. */
-    private static CompletableFuture<byte[]> readAsync(InputStream stream, int limit) {
-        return CompletableFuture.supplyAsync(() -> {
-            try (stream) {
-                byte[] head = stream.readNBytes(limit);
-                stream.transferTo(OutputStream.nullOutputStream());
-                return head;
-            } catch (IOException exception) {
-                throw new UncheckedIOException(exception);
-            }
-        }, AppExecutorUtil.getAppExecutorService());
     }
 }

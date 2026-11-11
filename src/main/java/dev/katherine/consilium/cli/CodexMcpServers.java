@@ -1,17 +1,14 @@
 package dev.katherine.consilium.cli;
 
 import dev.katherine.consilium.ConsiliumBundle;
+import dev.katherine.consilium.process.BoundedProcess;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.intellij.execution.configurations.GeneralCommandLine;
-import com.intellij.util.concurrency.AppExecutorUtil;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -19,10 +16,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 /**
@@ -101,49 +94,21 @@ final class CodexMcpServers {
         } catch (Exception exception) {
             throw refused(String.valueOf(exception.getMessage()));
         }
+        BoundedProcess.Result result;
         try {
-            process.getOutputStream().close();
-            // Both streams are read concurrently so neither pipe can fill up and stall the CLI.
-            CompletableFuture<byte[]> stdout = readAsync(process.getInputStream(), MAX_LISTING_BYTES);
-            CompletableFuture<byte[]> stderr = readAsync(process.getErrorStream(), MAX_STDERR_BYTES);
-            // Polled rather than one long wait, so Stop doesn't keep the room busy until the timeout.
-            long deadline = System.nanoTime() + timeout.toNanos();
-            while (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
-                if (cancelled.getAsBoolean()) throw refused("stopped");
-                if (System.nanoTime() > deadline) {
-                    throw refused("`codex mcp list --json` did not finish in " + timeout.toSeconds() + " s");
-                }
-            }
-            String output = new String(stdout.get(timeout.toMillis(), TimeUnit.MILLISECONDS), StandardCharsets.UTF_8);
-            if (process.exitValue() != 0) {
-                String error = new String(stderr.get(timeout.toMillis(), TimeUnit.MILLISECONDS), StandardCharsets.UTF_8).strip();
-                throw refused(error.isEmpty() ? "`codex mcp list --json` exited with code " + process.exitValue() : error);
-            }
-            return output;
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw refused("interrupted");
-        } catch (IOException | ExecutionException | TimeoutException exception) {
-            throw refused(String.valueOf(exception.getMessage()));
-        } finally {
-            if (process.isAlive()) {
-                process.descendants().forEach(ProcessHandle::destroyForcibly);
-                process.destroyForcibly();
-            }
+            result = BoundedProcess.await(process, timeout, MAX_LISTING_BYTES, MAX_STDERR_BYTES, cancelled);
+        } catch (BoundedProcess.Failure failure) {
+            throw refused(switch (failure.kind()) {
+                case CANCELLED -> "stopped";
+                case TIMED_OUT -> "`codex mcp list --json` did not finish in " + timeout.toSeconds() + " s";
+                case INTERRUPTED, UNREADABLE -> failure.getMessage();
+            });
         }
-    }
-
-    /** Keeps the first {@code limit} bytes and drains the rest, so the writer never blocks. */
-    private static CompletableFuture<byte[]> readAsync(InputStream stream, int limit) {
-        return CompletableFuture.supplyAsync(() -> {
-            try (stream) {
-                byte[] head = stream.readNBytes(limit);
-                stream.transferTo(OutputStream.nullOutputStream());
-                return head;
-            } catch (IOException exception) {
-                throw new IllegalStateException(exception);
-            }
-        }, AppExecutorUtil.getAppExecutorService());
+        if (result.exitCode() != 0) {
+            String error = new String(result.error(), StandardCharsets.UTF_8).strip();
+            throw refused(error.isEmpty() ? "`codex mcp list --json` exited with code " + result.exitCode() : error);
+        }
+        return new String(result.output(), StandardCharsets.UTF_8);
     }
 
     private static TurnRefusedException refused(String reason) {
