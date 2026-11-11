@@ -1,11 +1,9 @@
 package dev.katherine.consilium;
 
-import com.intellij.ide.plugins.IdeaPluginDescriptor;
-import com.intellij.ide.plugins.PluginManagerCore;
+import com.intellij.ide.plugins.cl.PluginAwareClassLoader;
 import com.intellij.ide.trustedProjects.TrustedProjects;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.editor.Editor;
-import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.ComboBox;
@@ -171,9 +169,12 @@ final class ConsiliumPanel implements Disposable, ChatSession.View {
     }
 
     // The version comes from the installed plugin, so the window shows which build is running.
+    // The plugin's own class loader knows its descriptor: PluginManagerCore.getPlugin and
+    // PluginManager.getPluginByClass are internal API since build 262 (checked 2026-11-11).
     private static String pluginVersion() {
-        IdeaPluginDescriptor plugin = PluginManagerCore.getPlugin(PluginId.getId("dev.katherine.consilium"));
-        return plugin == null ? "" : "v" + plugin.getVersion();
+        if (!(ConsiliumPanel.class.getClassLoader() instanceof PluginAwareClassLoader loader)) return "";
+        String version = loader.getPluginDescriptor().getVersion();
+        return version == null ? "" : "v" + version;
     }
 
     private void send() {
